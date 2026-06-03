@@ -1,0 +1,5 @@
+PyQt6==6.7.0
+python-mpv==1.0.7
+yt-dlp
+requests
+mutagen

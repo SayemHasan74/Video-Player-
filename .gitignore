@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.python-version
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Build outputs
+build/
+dist/
+installer_output/
+*.spec
+
+# Local runtime binaries
+mpv-2.dll
+libmpv-2.dll
+prism_player/mpv-2.dll
+prism_player/libmpv-2.dll
+
+# Editor and OS noise
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Logs and temporary files
+*.log
+*.tmp
+*.bak
