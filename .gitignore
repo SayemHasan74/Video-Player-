@@ -14,6 +14,7 @@ build/
 dist/
 installer_output/
 *.spec
+release/
 
 # Local runtime binaries
 mpv-2.dll

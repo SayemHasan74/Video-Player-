@@ -4,6 +4,14 @@ Prism Player is a dark, modern Windows 11 desktop media player built with PyQt6 
 
 Screenshot placeholder: add an app screenshot here after launching Prism Player with a local video.
 
+## Download
+
+The ready-to-run Windows build is published on the GitHub Releases page:
+
+https://github.com/SayemHasan74/Video-Player-/releases/tag/v1.0.0
+
+Download `PrismPlayer-v1.0.0-portable.zip`, extract it, and run `PrismPlayer.exe`.
+
 ## Requirements
 
 - Python 3.11+
