@@ -15,6 +15,7 @@ dist/
 installer_output/
 *.spec
 release/
+recovery/
 
 # Local runtime binaries
 mpv-2.dll

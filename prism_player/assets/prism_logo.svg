@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="prismBody" x1="42" y1="38" x2="214" y2="218" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#9fd0ff"/>
+      <stop offset="0.42" stop-color="#5e9bff"/>
+      <stop offset="1" stop-color="#7a5cff"/>
+    </linearGradient>
+    <linearGradient id="prismGlow" x1="72" y1="54" x2="186" y2="210" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.95"/>
+      <stop offset="0.5" stop-color="#d7e9ff" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="18" stdDeviation="14" flood-color="#000000" flood-opacity="0.45"/>
+    </filter>
+  </defs>
+  <rect width="256" height="256" rx="56" fill="#0d0d0d"/>
+  <path d="M128 24 218 92 128 232 38 92Z" fill="url(#prismBody)" filter="url(#shadow)"/>
+  <path d="M128 24 218 92 128 232 38 92Z" fill="none" stroke="#d9e8ff" stroke-opacity="0.72" stroke-width="7" stroke-linejoin="round"/>
+  <path d="M128 24v208M38 92h180M80 92l48 140M176 92 128 232" fill="none" stroke="#d9e8ff" stroke-opacity="0.34" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M128 24 80 92h96Z" fill="url(#prismGlow)"/>
+  <circle cx="88" cy="68" r="10" fill="#ffffff" fill-opacity="0.72"/>
+</svg>
