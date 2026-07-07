@@ -200,7 +200,8 @@ class PlayerBackend(QObject):
             return
 
         base_kwargs: dict[str, Any] = {
-            "title": "",
+            "title": "Prism Player",
+            "force_media_title": "Prism Player",
             "border": False,
             "force_window": False,
             "input_default_bindings": False,
@@ -215,7 +216,7 @@ class PlayerBackend(QObject):
             "log_handler": self._mpv_log,
         }
         if video_widget is not None:
-            base_kwargs["wid"] = int(video_widget.winId())
+            base_kwargs["wid"] = str(int(video_widget.winId()))
 
         profiles: tuple[dict[str, Any], ...] = (
             {"vo": "gpu-next", "gpu_api": "d3d11"},

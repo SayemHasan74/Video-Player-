@@ -6,11 +6,11 @@ import logging
 from datetime import datetime
 from pathlib import Path
 
-from PyQt6.QtCore import QEvent, QPoint, QRect, QThread, QTimer, Qt, pyqtSignal
+from PyQt6.QtCore import QEasingCurve, QEvent, QParallelAnimationGroup, QPoint, QPropertyAnimation, QRect, QThread, QTimer, Qt, pyqtSignal
 from PyQt6.QtGui import QAction, QCloseEvent, QCursor, QDragEnterEvent, QDropEvent, QIcon, QKeyEvent, QShortcut
-from PyQt6.QtWidgets import QApplication, QFileDialog, QLabel, QMainWindow, QMenu, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QApplication, QFileDialog, QLabel, QMainWindow, QMenu, QWidget
 
-from config.settings import DEFAULT_WINDOW_SIZE, MIN_WINDOW_SIZE, PLAYLIST_PANEL_WIDTH, SettingsStore
+from config.settings import CONTROL_BAR_HEIGHT, DEFAULT_WINDOW_SIZE, MIN_WINDOW_SIZE, PLAYLIST_PANEL_WIDTH, SettingsStore, TITLE_BAR_HEIGHT
 from core.history_manager import HistoryManager
 from core.player_backend import PlayerBackend
 from core.playlist_manager import PlaylistItem, PlaylistManager
@@ -74,6 +74,7 @@ class MainWindow(QMainWindow):
         self._cover_mode = False
         self._chrome_visible = True
         self._is_playing = False
+        self._chrome_animation: QParallelAnimationGroup | None = None
         self.central_shell: QWidget | None = None
         self._hide_chrome_timer = QTimer(self)
         self._hide_chrome_timer.setSingleShot(True)
@@ -211,13 +212,13 @@ class MainWindow(QMainWindow):
         central = QWidget(self)
         self.central_shell = central
         central.setStyleSheet("background: #0d0d0d;")
-        root = QVBoxLayout(central)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(0)
-        root.addWidget(self.title_bar)
-        root.addWidget(self.video, 1)
-        root.addWidget(self.control_bar)
         self.setCentralWidget(central)
+        self.video.setParent(central)
+        self.title_bar.setParent(central)
+        self.control_bar.setParent(central)
+        for chrome in (self.title_bar, self.control_bar):
+            chrome.setAttribute(Qt.WidgetAttribute.WA_NativeWindow, True)
+            chrome.raise_()
         self.drop_overlay.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.drop_overlay.setStyleSheet(
             "QLabel { color: #d9e8ff; border: 2px solid #5e9bff; "
@@ -299,6 +300,7 @@ class MainWindow(QMainWindow):
         self.player.load(item.source, resume)
         self.player.set_cover_mode(False)
         self.osd.show_message("Playing")
+        QTimer.singleShot(250, self._position_overlays)
 
     def _time_changed(self, seconds: float) -> None:
         self._current_position = seconds
@@ -571,24 +573,73 @@ class MainWindow(QMainWindow):
     def _animate_player_chrome(self, show: bool) -> None:
         if self.central_shell is None or self.isMinimized():
             return
-        if self._chrome_visible == show:
+        if self._chrome_visible == show and self._chrome_animation is None:
             return
+        if self._chrome_animation is not None:
+            self._chrome_animation.stop()
         self._chrome_visible = show
+        shell_rect = self.central_shell.rect()
+        start_title = self.title_bar.geometry()
+        start_control = self.control_bar.geometry()
+        if not start_title.isValid() or start_title.width() != shell_rect.width():
+            start_title = QRect(0, 0 if show else -TITLE_BAR_HEIGHT, shell_rect.width(), TITLE_BAR_HEIGHT)
+        if not start_control.isValid() or start_control.width() != shell_rect.width():
+            y = shell_rect.height() - CONTROL_BAR_HEIGHT if show else shell_rect.height()
+            start_control = QRect(0, y, shell_rect.width(), CONTROL_BAR_HEIGHT)
+        target_title = QRect(0, 0 if show else -TITLE_BAR_HEIGHT, shell_rect.width(), TITLE_BAR_HEIGHT)
+        target_control = QRect(0, shell_rect.height() - CONTROL_BAR_HEIGHT if show else shell_rect.height(), shell_rect.width(), CONTROL_BAR_HEIGHT)
         self.title_bar.show()
         self.control_bar.show()
-        self.title_bar.fade_to(1.0 if show else 0.0, 140 if show else 220)
-        self.control_bar.fade_to(1.0 if show else 0.0, 140 if show else 220)
+        self.title_bar.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, not show)
+        self.control_bar.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, not show)
+        self.title_bar.raise_()
+        self.control_bar.raise_()
+        self.title_bar.opacity.setOpacity(1.0)
+        self.control_bar.opacity.setOpacity(1.0)
+        group = QParallelAnimationGroup(self)
+        for widget, start, target in ((self.title_bar, start_title, target_title), (self.control_bar, start_control, target_control)):
+            animation = QPropertyAnimation(widget, b"geometry", group)
+            animation.setDuration(180 if show else 220)
+            animation.setEasingCurve(QEasingCurve.Type.OutCubic if show else QEasingCurve.Type.InCubic)
+            animation.setStartValue(start)
+            animation.setEndValue(target)
+            group.addAnimation(animation)
+
+        def finish() -> None:
+            if not show:
+                self.title_bar.hide()
+                self.control_bar.hide()
+            else:
+                self.title_bar.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
+                self.control_bar.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
+                self.title_bar.raise_()
+                self.control_bar.raise_()
+            self._chrome_animation = None
+
+        group.finished.connect(finish)
+        self._chrome_animation = group
+        group.start()
 
     def _position_overlays(self) -> None:
+        if self.central_shell is not None:
+            shell_rect = self.central_shell.rect()
+            self.video.setGeometry(shell_rect)
+            if self._chrome_animation is None:
+                title_y = 0 if self._chrome_visible else -TITLE_BAR_HEIGHT
+                control_y = shell_rect.height() - CONTROL_BAR_HEIGHT if self._chrome_visible else shell_rect.height()
+                self.title_bar.setGeometry(0, title_y, shell_rect.width(), TITLE_BAR_HEIGHT)
+                self.control_bar.setGeometry(0, control_y, shell_rect.width(), CONTROL_BAR_HEIGHT)
+                self.title_bar.setVisible(self._chrome_visible and not self.isMinimized())
+                self.control_bar.setVisible(self._chrome_visible and not self.isMinimized())
+                if self._chrome_visible and not self.isMinimized():
+                    self.title_bar.raise_()
+                    self.control_bar.raise_()
         rect = self.video.rect()
         self.playlist_panel.setGeometry(max(0, rect.width() - PLAYLIST_PANEL_WIDTH), 0, PLAYLIST_PANEL_WIDTH, rect.height())
         self.drop_overlay.setGeometry(rect)
         if self.osd.isVisible():
             self.osd.adjustSize()
             self.osd.move((rect.width() - self.osd.width()) // 2, max(56, rect.height() // 2 - 28))
-        if self.central_shell is not None and not self.isMinimized():
-            self.title_bar.show()
-            self.control_bar.show()
 
     def _start_window_drag(self, global_pos: QPoint) -> None:
         if self.isMaximized():
