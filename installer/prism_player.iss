@@ -1,18 +1,18 @@
-#define MyAppName "Prism Player"
+#define MyAppName "Comet Player"
 #define MyAppVersion "1.0.0"
-#define MyAppPublisher "Prism Player"
-#define MyAppExeName "PrismPlayer.exe"
+#define MyAppPublisher "Comet Player"
+#define MyAppExeName "CometPlayer.exe"
 
 [Setup]
-AppId={{3D62B65C-3160-4F7E-84DD-1315B79AA0F3}
+AppId={{8A0F5B33-9AAE-4D72-97F3-AC5D363A57C8}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
-DefaultDirName={autopf}\Prism Player
-DefaultGroupName=Prism Player
+DefaultDirName={autopf}\Comet Player
+DefaultGroupName=Comet Player
 AllowNoIcons=yes
 OutputDir=..\installer_output
-OutputBaseFilename=PrismPlayerSetup
+OutputBaseFilename=CometPlayerSetup
 SetupIconFile=..\prism_player\assets\prism_logo.ico
 Compression=lzma2
 SolidCompression=yes
@@ -30,25 +30,25 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional shortcuts:"; Flags: checkedonce
 
 [Files]
-Source: "..\dist\PrismPlayer\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\dist\CometPlayer\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{group}\Prism Player"; Filename: "{app}\{#MyAppExeName}"
-Name: "{autodesktop}\Prism Player"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+Name: "{group}\Comet Player"; Filename: "{app}\{#MyAppExeName}"
+Name: "{autodesktop}\Comet Player"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Registry]
-Root: HKCU; Subkey: "Software\Classes\PrismPlayer.Media"; ValueType: string; ValueName: ""; ValueData: "Prism Player media file"; Flags: uninsdeletekey
-Root: HKCU; Subkey: "Software\Classes\PrismPlayer.Media\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\{#MyAppExeName},0"
-Root: HKCU; Subkey: "Software\Classes\PrismPlayer.Media\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""%1"""
+Root: HKCU; Subkey: "Software\Classes\CometPlayer.Media"; ValueType: string; ValueName: ""; ValueData: "Comet Player media file"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\CometPlayer.Media\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\{#MyAppExeName},0"
+Root: HKCU; Subkey: "Software\Classes\CometPlayer.Media\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""%1"""
 
-Root: HKCU; Subkey: "Software\Classes\.mp4\OpenWithProgids"; ValueType: string; ValueName: "PrismPlayer.Media"; ValueData: ""; Flags: uninsdeletevalue
-Root: HKCU; Subkey: "Software\Classes\.mkv\OpenWithProgids"; ValueType: string; ValueName: "PrismPlayer.Media"; ValueData: ""; Flags: uninsdeletevalue
-Root: HKCU; Subkey: "Software\Classes\.avi\OpenWithProgids"; ValueType: string; ValueName: "PrismPlayer.Media"; ValueData: ""; Flags: uninsdeletevalue
-Root: HKCU; Subkey: "Software\Classes\.mov\OpenWithProgids"; ValueType: string; ValueName: "PrismPlayer.Media"; ValueData: ""; Flags: uninsdeletevalue
-Root: HKCU; Subkey: "Software\Classes\.webm\OpenWithProgids"; ValueType: string; ValueName: "PrismPlayer.Media"; ValueData: ""; Flags: uninsdeletevalue
-Root: HKCU; Subkey: "Software\Classes\.mp3\OpenWithProgids"; ValueType: string; ValueName: "PrismPlayer.Media"; ValueData: ""; Flags: uninsdeletevalue
-Root: HKCU; Subkey: "Software\Classes\.flac\OpenWithProgids"; ValueType: string; ValueName: "PrismPlayer.Media"; ValueData: ""; Flags: uninsdeletevalue
-Root: HKCU; Subkey: "Software\Classes\.wav\OpenWithProgids"; ValueType: string; ValueName: "PrismPlayer.Media"; ValueData: ""; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Classes\.mp4\OpenWithProgids"; ValueType: string; ValueName: "CometPlayer.Media"; ValueData: ""; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Classes\.mkv\OpenWithProgids"; ValueType: string; ValueName: "CometPlayer.Media"; ValueData: ""; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Classes\.avi\OpenWithProgids"; ValueType: string; ValueName: "CometPlayer.Media"; ValueData: ""; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Classes\.mov\OpenWithProgids"; ValueType: string; ValueName: "CometPlayer.Media"; ValueData: ""; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Classes\.webm\OpenWithProgids"; ValueType: string; ValueName: "CometPlayer.Media"; ValueData: ""; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Classes\.mp3\OpenWithProgids"; ValueType: string; ValueName: "CometPlayer.Media"; ValueData: ""; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Classes\.flac\OpenWithProgids"; ValueType: string; ValueName: "CometPlayer.Media"; ValueData: ""; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Classes\.wav\OpenWithProgids"; ValueType: string; ValueName: "CometPlayer.Media"; ValueData: ""; Flags: uninsdeletevalue
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "Launch Prism Player"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#MyAppExeName}"; Description: "Launch Comet Player"; Flags: nowait postinstall skipifsilent

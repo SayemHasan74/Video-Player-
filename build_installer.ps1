@@ -23,7 +23,7 @@ if (-not (Test-Path $LibMpv)) {
     --clean `
     --windowed `
     --onedir `
-    --name PrismPlayer `
+    --name CometPlayer `
     --icon "prism_player\assets\prism_logo.ico" `
     --paths prism_player `
     --add-binary "libmpv-2.dll;." `

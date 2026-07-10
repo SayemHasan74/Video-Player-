@@ -1,4 +1,4 @@
-"""python-mpv wrapper used by the Prism Player UI."""
+"""python-mpv wrapper used by the Comet Player UI."""
 
 from __future__ import annotations
 
@@ -200,8 +200,8 @@ class PlayerBackend(QObject):
             return
 
         base_kwargs: dict[str, Any] = {
-            "title": "Prism Player",
-            "force_media_title": "Prism Player",
+            "title": "Comet Player",
+            "force_media_title": "Comet Player",
             "border": False,
             "force_window": False,
             "input_default_bindings": False,

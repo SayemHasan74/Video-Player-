@@ -1,8 +1,8 @@
-# Prism Player
+# Comet Player
 
-Prism Player is a dark, modern Windows 11 desktop media player built with PyQt6 and mpv. It is inspired by IINA's clean playback-first feel while keeping a native Windows-style frameless window, overlay controls, playlist panel, URL playback, screenshots, resume history, and keyboard shortcuts.
+Comet Player is a dark, modern Windows 11 desktop media player built with PyQt6 and mpv. It is inspired by IINA's clean playback-first feel while keeping a native Windows-style frameless window, overlay controls, playlist panel, URL playback, screenshots, resume history, and keyboard shortcuts.
 
-Screenshot placeholder: add an app screenshot here after launching Prism Player with a local video.
+Screenshot placeholder: add an app screenshot here after launching Comet Player with a local video.
 
 ## Download
 
@@ -10,7 +10,7 @@ The ready-to-run Windows build is published on the GitHub Releases page:
 
 https://github.com/SayemHasan74/Video-Player-/releases/tag/v1.0.0
 
-Download `PrismPlayer-v1.0.0-portable.zip`, extract it, and run `PrismPlayer.exe`.
+Download `CometPlayer-v1.0.0-portable.zip`, extract it, and run `CometPlayer.exe`.
 
 ## Requirements
 
@@ -59,7 +59,7 @@ python main.py
 - Fit or cover-screen video mode for fullscreen playback
 - A-B loop controls
 - Playback speed cycling
-- Screenshots saved as `PrismPlayer_YYYYMMDD_HHMMSS.png`
+- Screenshots saved as `CometPlayer_YYYYMMDD_HHMMSS.png`
 - Picture-in-picture shell
 - Drag-and-drop files, folders, and URLs
 - Always-on-top toggle

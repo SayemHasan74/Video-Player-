@@ -139,15 +139,15 @@ class ControlBar(QWidget):
         self.fullscreen_button.set_icon_name("fullscreen_exit" if enabled else "fullscreen")
 
     def set_cover_mode(self, enabled: bool) -> None:
-        self.cover_button.setIcon(svg_icon("cover", "#5e9bff" if enabled else "#c0c0c0"))
+        self.cover_button.setIcon(svg_icon("cover", "#f3f3f3" if enabled else "#c0c0c0"))
         self.cover_button.setToolTip("Fit video to screen" if enabled else "Cover whole screen")
 
     def set_playlist_visible(self, enabled: bool) -> None:
-        color = "#5e9bff" if enabled else "#c0c0c0"
+        color = "#f3f3f3" if enabled else "#c0c0c0"
         self.playlist_button.setIcon(svg_icon("playlist_toggle", color))
 
     def set_ab_state(self, label: str, active: bool) -> None:
-        self.ab_button.setIcon(svg_icon("ab_loop", "#5e9bff" if active else "#c0c0c0"))
+        self.ab_button.setIcon(svg_icon("ab_loop", "#f3f3f3" if active else "#c0c0c0"))
         self.ab_button.setToolTip(label)
 
     def resizeEvent(self, event: QResizeEvent) -> None:

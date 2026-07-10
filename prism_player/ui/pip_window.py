@@ -5,7 +5,7 @@ from __future__ import annotations
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
-from config.settings import PIP_DEFAULT_SIZE, PIP_MINIMUM_SIZE
+from config.settings import APP_SHORT_NAME, PIP_DEFAULT_SIZE, PIP_MINIMUM_SIZE
 
 
 class PiPWindow(QWidget):
@@ -13,7 +13,7 @@ class PiPWindow(QWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent, Qt.WindowType.Window | Qt.WindowType.WindowStaysOnTopHint)
-        self.setWindowTitle("Prism PiP")
+        self.setWindowTitle(f"{APP_SHORT_NAME} PiP")
         self.setMinimumSize(*PIP_MINIMUM_SIZE)
         self.resize(*PIP_DEFAULT_SIZE)
         self.setStyleSheet("background: #050505; color: #cfcfcf;")

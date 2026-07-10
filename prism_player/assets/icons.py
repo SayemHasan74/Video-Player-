@@ -8,6 +8,7 @@ from PyQt6.QtGui import QIcon, QPixmap
 
 PATHS: dict[str, str] = {
     "prism": '<path d="M12 2 3 20h18L12 2Zm0 5.4 4.6 9.2H7.4L12 7.4Z"/>',
+    "comet": '<path d="M18.2 5.8c-2.8.7-5.6 2.5-8.4 5.4 3.5-1.3 6.4-1.3 8.7.1.9-2.1.8-3.9-.3-5.5Z"/><path d="M4.3 14.7c2.7 3.6 7.9 4.4 11.6 1.8 3.2-2.3 4.3-6.5 2.8-9.8" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><circle cx="18.1" cy="5.9" r="3.3"/>',
     "play": '<path d="M8 5v14l11-7L8 5Z"/>',
     "pause": '<path d="M7 5h4v14H7V5Zm6 0h4v14h-4V5Z"/>',
     "stop": '<path d="M6 6h12v12H6V6Z"/>',
@@ -37,7 +38,7 @@ def svg_icon(name: str, color: str = "#c0c0c0", size: int = 24) -> QIcon:
     path = PATHS.get(name, PATHS["prism"])
     svg = (
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}" '
-        f'viewBox="0 0 24 24" fill="{color}">{path}</svg>'
+        f'viewBox="0 0 24 24" fill="{color}" color="{color}">{path}</svg>'
     )
     pixmap = QPixmap()
     pixmap.loadFromData(QByteArray(svg.encode("utf-8")), "SVG")

@@ -1,4 +1,4 @@
-"""Application settings, constants, and JSON persistence for Prism Player."""
+"""Application settings, constants, and JSON persistence for Comet Player."""
 
 from __future__ import annotations
 
@@ -8,8 +8,8 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
-APP_NAME = "Prism Player"
-APP_SHORT_NAME = "Prism"
+APP_NAME = "Comet Player"
+APP_SHORT_NAME = "Comet"
 APP_VERSION = "1.0.0"
 
 DEFAULT_WINDOW_SIZE = (1100, 680)
@@ -57,7 +57,7 @@ SUBTITLE_EXTENSIONS: frozenset[str] = frozenset({".ass", ".srt", ".ssa", ".sub",
 def app_data_dir() -> Path:
     """Return the per-user settings directory."""
     root = Path.home() / "AppData" / "Roaming" if (Path.home() / "AppData").exists() else Path.home()
-    path = root / "PrismPlayer"
+    path = root / "CometPlayer"
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -167,13 +167,13 @@ QMenu::separator { height: 1px; background: #2e2e2e; margin: 4px 0; }
 QDialog { background: #111111; }
 QLineEdit { background: #1a1a1a; border: 1px solid #303030; border-radius: 6px;
             padding: 6px 10px; color: #f0f0f0; }
-QLineEdit:focus { border-color: #5e9bff; }
+QLineEdit:focus { border-color: #eeeeee; }
 QCheckBox::indicator { width: 16px; height: 16px; border-radius: 4px;
                        border: 1.5px solid #404040; background: transparent; }
-QCheckBox::indicator:checked { background: #5e9bff; border-color: #5e9bff; }
+QCheckBox::indicator:checked { background: #eeeeee; border-color: #eeeeee; }
 QSlider { outline: none; }
 QSlider::groove:horizontal { height: 4px; background: #2e2e2e; border-radius: 2px; }
-QSlider::sub-page:horizontal { background: #5e9bff; border-radius: 2px; }
+QSlider::sub-page:horizontal { background: #eeeeee; border-radius: 2px; }
 QSlider::handle:horizontal { width: 14px; height: 14px; margin: -5px 0;
                               border-radius: 7px; background: white; }
 """

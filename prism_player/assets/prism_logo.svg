@@ -1,23 +1,50 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
   <defs>
-    <linearGradient id="prismBody" x1="42" y1="38" x2="214" y2="218" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#9fd0ff"/>
-      <stop offset="0.42" stop-color="#5e9bff"/>
-      <stop offset="1" stop-color="#7a5cff"/>
+    <radialGradient id="space" cx="50%" cy="42%" r="76%">
+      <stop offset="0" stop-color="#25223a"/>
+      <stop offset="0.58" stop-color="#10101c"/>
+      <stop offset="1" stop-color="#050509"/>
+    </radialGradient>
+    <linearGradient id="tail" x1="46" y1="178" x2="207" y2="66" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0"/>
+      <stop offset="0.38" stop-color="#dfe7ff" stop-opacity="0.2"/>
+      <stop offset="0.72" stop-color="#fff9d7" stop-opacity="0.86"/>
+      <stop offset="1" stop-color="#ffffff"/>
     </linearGradient>
-    <linearGradient id="prismGlow" x1="72" y1="54" x2="186" y2="210" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#ffffff" stop-opacity="0.95"/>
-      <stop offset="0.5" stop-color="#d7e9ff" stop-opacity="0.22"/>
-      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    <linearGradient id="blueTail" x1="58" y1="170" x2="185" y2="71" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#5578ff" stop-opacity="0"/>
+      <stop offset="0.52" stop-color="#6f8cff" stop-opacity="0.34"/>
+      <stop offset="1" stop-color="#f7fbff" stop-opacity="0.8"/>
     </linearGradient>
-    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
-      <feDropShadow dx="0" dy="18" stdDeviation="14" flood-color="#000000" flood-opacity="0.45"/>
+    <radialGradient id="head" cx="45%" cy="36%" r="68%">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="0.42" stop-color="#fffbd9"/>
+      <stop offset="0.78" stop-color="#d9e7ff"/>
+      <stop offset="1" stop-color="#7c98ff" stop-opacity="0.62"/>
+    </radialGradient>
+    <filter id="softGlow" x="-45%" y="-45%" width="190%" height="190%">
+      <feGaussianBlur stdDeviation="7" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
     </filter>
   </defs>
-  <rect width="256" height="256" rx="56" fill="#0d0d0d"/>
-  <path d="M128 24 218 92 128 232 38 92Z" fill="url(#prismBody)" filter="url(#shadow)"/>
-  <path d="M128 24 218 92 128 232 38 92Z" fill="none" stroke="#d9e8ff" stroke-opacity="0.72" stroke-width="7" stroke-linejoin="round"/>
-  <path d="M128 24v208M38 92h180M80 92l48 140M176 92 128 232" fill="none" stroke="#d9e8ff" stroke-opacity="0.34" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M128 24 80 92h96Z" fill="url(#prismGlow)"/>
-  <circle cx="88" cy="68" r="10" fill="#ffffff" fill-opacity="0.72"/>
+  <rect width="256" height="256" rx="58" fill="url(#space)"/>
+  <g fill="#ffffff">
+    <circle cx="41" cy="45" r="1.5" opacity="0.72"/>
+    <circle cx="69" cy="30" r="1" opacity="0.56"/>
+    <circle cx="211" cy="42" r="1.3" opacity="0.6"/>
+    <circle cx="198" cy="194" r="1.1" opacity="0.5"/>
+    <circle cx="43" cy="201" r="1" opacity="0.55"/>
+    <circle cx="222" cy="132" r="1" opacity="0.4"/>
+    <circle cx="112" cy="53" r="1.1" opacity="0.48"/>
+    <circle cx="81" cy="222" r="1.2" opacity="0.4"/>
+  </g>
+  <path d="M50 163c18 42 78 59 121 28 39-28 49-83 22-120" fill="none" stroke="#ffffff" stroke-width="14" stroke-linecap="round" opacity="0.08"/>
+  <path d="M54 158c28 35 75 43 110 18 34-24 44-68 24-102" fill="none" stroke="url(#blueTail)" stroke-width="30" stroke-linecap="round" opacity="0.88"/>
+  <path d="M61 159c32 23 69 24 98 2 27-21 35-55 21-83" fill="none" stroke="url(#tail)" stroke-width="16" stroke-linecap="round" filter="url(#softGlow)"/>
+  <path d="M183 80c-28 9-56 27-82 54 38-16 68-18 90-8 7-17 5-32-8-46Z" fill="#ffffff" opacity="0.18"/>
+  <circle cx="187" cy="78" r="25" fill="url(#head)" filter="url(#softGlow)"/>
+  <circle cx="179" cy="70" r="7" fill="#ffffff" opacity="0.86"/>
 </svg>

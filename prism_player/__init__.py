@@ -1,1 +1,1 @@
-"""Prism Player package."""
+"""Comet Player package."""

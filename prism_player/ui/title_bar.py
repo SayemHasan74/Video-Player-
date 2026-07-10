@@ -7,7 +7,7 @@ from PyQt6.QtGui import QMouseEvent
 from PyQt6.QtWidgets import QGraphicsOpacityEffect, QHBoxLayout, QLabel, QPushButton, QWidget
 
 from assets.icons import svg_icon
-from config.settings import TITLE_BAR_HEIGHT
+from config.settings import APP_SHORT_NAME, TITLE_BAR_HEIGHT
 
 
 class TitleBar(QWidget):
@@ -44,8 +44,8 @@ class TitleBar(QWidget):
         )
         self._dragging = False
         self.logo = QLabel(self)
-        self.logo.setPixmap(svg_icon("prism", "#5e9bff", 18).pixmap(18, 18))
-        self.app_label = QLabel("Prism", self)
+        self.logo.setPixmap(svg_icon("comet", "#f3f3f3", 18).pixmap(18, 18))
+        self.app_label = QLabel(APP_SHORT_NAME, self)
         self.app_label.setStyleSheet("font-size: 13px; font-weight: 500; color: #f0f0f0;")
         self.title_label = QLabel("", self)
         self.title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)

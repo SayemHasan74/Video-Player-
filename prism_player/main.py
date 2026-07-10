@@ -1,4 +1,4 @@
-"""Prism Player application entry point."""
+"""Comet Player application entry point."""
 
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ from ui.main_window import MainWindow
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     """Parse command-line arguments."""
-    parser = argparse.ArgumentParser(description="Prism Player")
+    parser = argparse.ArgumentParser(description=APP_NAME)
     parser.add_argument("files", nargs="*", help="Media files to open")
     parser.add_argument("--verbose", action="store_true", help="Enable debug logging")
     return parser.parse_args(argv)
@@ -64,13 +64,13 @@ def show_mpv_missing_dialog() -> None:
     QMessageBox.critical(
         None,
         "mpv-2.dll not found",
-        "Prism Player needs mpv-2.dll to play media.\n\n"
-        "Place mpv-2.dll or libmpv-2.dll beside main.py or anywhere on PATH, then run Prism again.",
+        f"{APP_NAME} needs mpv-2.dll to play media.\n\n"
+        f"Place mpv-2.dll or libmpv-2.dll beside main.py or anywhere on PATH, then run {APP_NAME} again.",
     )
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Start Prism Player."""
+    """Start Comet Player."""
     args = parse_args(argv or sys.argv[1:])
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
     app = QApplication(sys.argv)

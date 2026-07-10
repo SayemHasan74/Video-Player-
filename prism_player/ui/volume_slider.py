@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QWheelEvent
-from PyQt6.QtWidgets import QHBoxLayout, QPushButton, QSlider, QWidget
+from PyQt6.QtWidgets import QHBoxLayout, QPushButton, QWidget
 
 from assets.icons import svg_icon
+from ui.seekbar import LightBeamSlider
 
 
 class VolumeWidget(QWidget):
@@ -27,12 +28,10 @@ class VolumeWidget(QWidget):
             "QPushButton { background: transparent; border: none; border-radius: 0; outline: none; padding: 0; } "
             "QPushButton:hover { background: #242424; }"
         )
-        self.slider = QSlider(Qt.Orientation.Horizontal, self)
+        self.slider = LightBeamSlider(self)
         self.slider.setRange(0, 150)
         self.slider.setValue(80)
         self.slider.setFixedWidth(92)
-        self.slider.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.slider.setStyleSheet("QSlider { outline: none; }")
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
