@@ -8,7 +8,7 @@ from pathlib import Path
 
 from PyQt6.QtCore import QEasingCurve, QEvent, QParallelAnimationGroup, QPoint, QPropertyAnimation, QRect, QThread, QTimer, Qt, pyqtSignal
 from PyQt6.QtGui import QAction, QCloseEvent, QCursor, QDragEnterEvent, QDropEvent, QIcon, QKeyEvent, QShortcut
-from PyQt6.QtWidgets import QApplication, QFileDialog, QLabel, QMainWindow, QMenu, QWidget
+from PyQt6.QtWidgets import QApplication, QFileDialog, QLabel, QMainWindow, QMenu, QMenuBar, QWidget
 
 from config.settings import APP_NAME, CONTROL_BAR_HEIGHT, DEFAULT_WINDOW_SIZE, MIN_WINDOW_SIZE, PLAYLIST_PANEL_WIDTH, SettingsStore, TITLE_BAR_HEIGHT
 from core.history_manager import HistoryManager
@@ -16,6 +16,7 @@ from core.player_backend import PlayerBackend
 from core.playlist_manager import PlaylistItem, PlaylistManager
 from core.url_resolver import UrlResolverWorker
 from ui.control_bar import ControlBar
+from ui.auxiliary_windows import FiltersWindow, HistoryWindow, InspectorWindow, PreferencesWindow, WelcomeWindow
 from ui.open_url_dialog import OpenUrlDialog
 from ui.osd import OSDLabel
 from ui.pip_window import PiPWindow
@@ -26,7 +27,10 @@ from ui.title_bar import TitleBar
 from ui.track_menu import TrackMenuFactory
 from ui.video_widget import VideoWidget
 from utils.file_utils import is_media_file, is_probable_url, scan_media_files
+from core.media_probe import matching_subtitles
 from utils.time_utils import format_time
+
+APP_MENU_HEIGHT = 32
 
 
 class FolderScanWorker(QThread):
@@ -58,8 +62,16 @@ class MainWindow(QMainWindow):
         self.playlist_panel = PlaylistPanel(self)
         self.osd = OSDLabel(self.video)
         self.drop_overlay = QLabel("Drop to play", self.video)
+        self.buffering_indicator = QLabel("Buffering…", self.video)
+        self.buffering_indicator.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.buffering_indicator.setStyleSheet("background: rgba(0,0,0,180); color: white; border-radius: 18px; padding: 10px 16px;")
+        self.buffering_indicator.hide()
         self.track_menus = TrackMenuFactory(self)
         self.pip_window: PiPWindow | None = None
+        self.welcome_window: WelcomeWindow | None = None
+        self.history_window: HistoryWindow | None = None
+        self.filters_window: FiltersWindow | None = None
+        self.inspector_window: InspectorWindow | None = None
         self.url_worker: UrlResolverWorker | None = None
         self.folder_worker: FolderScanWorker | None = None
         self.audio_tracks: list[dict] = []
@@ -79,20 +91,28 @@ class MainWindow(QMainWindow):
         self._pre_mini_geometry = QRect()
         self._pre_mini_fullscreen = False
         self._pre_mini_maximized = False
+        self._pip_mode = False
+        self._pre_pip_geometry = QRect()
         self.central_shell: QWidget | None = None
+        self.app_menu_bar: QMenuBar | None = None
         self._hide_chrome_timer = QTimer(self)
         self._hide_chrome_timer.setSingleShot(True)
         self._hide_chrome_timer.timeout.connect(self._hide_player_chrome)
         self._current_duration = 0.0
         self._current_position = 0.0
         self._build_window()
+        self.osd.set_enabled(bool(self.settings.get("ui.show_osd", True)))
         self.player = PlayerBackend(self.video, self)
+        self._build_app_menu()
+        self._position_overlays()
         self._connect_signals()
         self._restore_geometry()
         self._apply_always_on_top(bool(self.settings.get("window.always_on_top", False)), announce=False)
         self._show_startup_window()
         if startup_files:
             self.open_files(startup_files, append=False)
+        elif self.settings.get("startup.show_welcome", True):
+            QTimer.singleShot(0, self._show_welcome)
 
     def open_files(self, files: list[Path], append: bool = False) -> None:
         """Add files to the playlist and start playback."""
@@ -139,9 +159,11 @@ class MainWindow(QMainWindow):
     def changeEvent(self, event: object) -> None:
         super().changeEvent(event)
         if self.isMinimized():
+            if self.app_menu_bar is not None: self.app_menu_bar.hide()
             self.title_bar.hide()
             self.control_bar.hide()
         else:
+            if self.app_menu_bar is not None: self.app_menu_bar.setVisible(self._chrome_visible and not self._pip_mode)
             self.title_bar.show()
             self.control_bar.show()
             self._position_overlays()
@@ -254,7 +276,8 @@ class MainWindow(QMainWindow):
         self.title_bar.closeClicked.connect(self.close)
         self.title_bar.dragStarted.connect(self._start_window_drag)
         self.title_bar.dragMoved.connect(self._move_window_drag)
-        self.video.doubleClicked.connect(self.player.play_pause)
+        self.video.doubleClicked.connect(self._toggle_fullscreen)
+        self.video.clicked.connect(self._video_clicked)
         self.video.rightClicked.connect(self._show_context_menu)
         self.video.scrolled.connect(self._handle_video_scroll)
         self.video.mouseMoved.connect(self._show_controls)
@@ -281,6 +304,13 @@ class MainWindow(QMainWindow):
         self.playlist.playlistChanged.connect(self._refresh_playlist)
         self.playlist_panel.itemActivated.connect(self.playlist.set_current)
         self.playlist_panel.removeRequested.connect(self.playlist.remove)
+        self.playlist_panel.addRequested.connect(self._choose_files)
+        self.playlist_panel.chapterActivated.connect(self.player.seek_absolute)
+        self.playlist_panel.quickSettingChanged.connect(self._apply_quick_setting)
+        self.playlist_panel.quick_settings.findSubtitles.connect(self._show_subtitle_finder)
+        self.playlist_panel.moveRequested.connect(self.playlist.move)
+        self.playlist_panel.sortRequested.connect(self.playlist.sort_items)
+        self.playlist_panel.playNextRequested.connect(self._queue_playlist_item_next)
         self.player.timeChanged.connect(self._time_changed)
         self.player.durationChanged.connect(self._duration_changed)
         self.player.pauseStateChanged.connect(self.control_bar.set_paused)
@@ -288,6 +318,8 @@ class MainWindow(QMainWindow):
         self.player.volumeChanged.connect(self.control_bar.set_volume_state)
         self.player.speedChanged.connect(self.control_bar.set_speed)
         self.player.tracksChanged.connect(self._tracks_changed)
+        self.player.chaptersChanged.connect(self.playlist_panel.set_chapters)
+        self.player.bufferingChanged.connect(self.buffering_indicator.setVisible)
         self.player.fileEnded.connect(self._play_next)
         self.player.error.connect(lambda text: self.osd.show_message(text, "error"))
         self.control_bar.set_cover_mode(self._cover_mode)
@@ -299,7 +331,28 @@ class MainWindow(QMainWindow):
         self.control_bar.installEventFilter(self)
         QShortcut(Qt.Key.Key_Return, self, activated=lambda: None if self.isFullScreen() else self._toggle_fullscreen())
         QShortcut(Qt.Key.Key_Enter, self, activated=lambda: None if self.isFullScreen() else self._toggle_fullscreen())
-        QShortcut(Qt.Key.Key_Escape, self, activated=self._pause_and_minimize)
+        QShortcut(Qt.Key.Key_Escape, self, activated=lambda: self._toggle_fullscreen() if self.isFullScreen() else None)
+
+    def _build_app_menu(self) -> None:
+        bar = QMenuBar(self.central_shell)
+        self.app_menu_bar = bar
+        bar.setNativeMenuBar(False)
+        bar.setAttribute(Qt.WidgetAttribute.WA_NativeWindow, True)
+        bar.setStyleSheet("QMenuBar { background: #0d0d0d; color: #eeeeee; padding-left: 6px; } QMenuBar::item { padding: 7px 10px; background: transparent; } QMenuBar::item:selected { background: #242424; }")
+        menus = {
+            "File": [("Open File…", self._choose_files), ("Open URL…", lambda: self._show_url_dialog("")), ("History", self._show_history), ("Quit", self.close)],
+            "Playback": [("Play/Pause", self.player.play_pause), ("Previous", self._play_previous), ("Next", self._play_next), ("A–B Loop", self._cycle_ab_loop)],
+            "Video": [("Fullscreen", self._toggle_fullscreen), ("Fit/Cover", self._toggle_cover_mode), ("Filters", self._show_filters), ("Inspector", self._show_inspector)],
+            "Audio": [("Audio Tracks", self._show_audio_menu), ("Mute", self.player.toggle_mute)],
+            "Subtitle": [("Subtitle Tracks", self._show_subtitle_menu), ("Find Online…", self._show_subtitle_finder)],
+            "Window": [("Playlist", self._toggle_playlist), ("Music Mode", self._toggle_mini_mode), ("Picture in Picture", self._toggle_pip), ("Always on Top", self._toggle_always_on_top), ("Preferences", self._show_settings)],
+            "Help": [("About Comet V2", lambda: self.osd.show_message("Comet V2 • IINA-inspired media player"))],
+        }
+        for title, entries in menus.items():
+            menu = bar.addMenu(title)
+            for label, callback in entries:
+                action = menu.addAction(label); action.triggered.connect(callback)
+        bar.raise_()
 
     def eventFilter(self, watched: object, event: QEvent) -> bool:
         if event.type() == QEvent.Type.MouseButtonPress and self.playlist_panel.isVisible():
@@ -328,6 +381,11 @@ class MainWindow(QMainWindow):
         self.settings.set("playback.cover_mode", False)
         resume = self.history.resume_position(item.source) if self.settings.get("playback.remember_position", True) else 0.0
         self.player.load(item.source, resume)
+        if not item.is_url and self.settings.get("subtitle.autoload", True):
+            for subtitle in matching_subtitles(item.source):
+                self.player.load_subtitle(subtitle)
+        if not item.is_url and Path(item.source).suffix.lower() in {".mp3", ".flac", ".aac", ".m4a", ".wav", ".ogg", ".opus", ".ape", ".aiff"} and self.settings.get("playback.auto_music_mode", True) and not self._mini_mode:
+            QTimer.singleShot(200, self._enter_mini_mode)
         self.player.set_cover_mode(False)
         self.osd.show_message("Playing")
         QTimer.singleShot(250, self._position_overlays)
@@ -343,6 +401,7 @@ class MainWindow(QMainWindow):
     def _tracks_changed(self, audio: list, subtitles: list) -> None:
         self.audio_tracks = audio
         self.subtitle_tracks = subtitles
+        self.playlist_panel.quick_settings.set_tracks(audio, subtitles)
 
     def _play_next(self) -> None:
         if self.playlist.next() is None:
@@ -350,6 +409,12 @@ class MainWindow(QMainWindow):
 
     def _play_previous(self) -> None:
         self.playlist.previous()
+
+    def _queue_playlist_item_next(self, index: int) -> None:
+        if not 0 <= index < len(self.playlist.items): return
+        item = self.playlist.items[index]
+        self.playlist.remove(index)
+        self.playlist.insert_next(item)
 
     def _play_resolved_url(self, original_url: str, resolved_url: str, title: str) -> None:
         item = PlaylistItem(resolved_url, title or original_url, True)
@@ -365,6 +430,10 @@ class MainWindow(QMainWindow):
             ("Play/Pause", self.player.play_pause),
             ("Screenshot", self._save_screenshot),
             ("Always on Top", self._toggle_always_on_top),
+            ("Music Mode", self._toggle_mini_mode),
+            ("Media Inspector", self._show_inspector),
+            ("Filters", self._show_filters),
+            ("History", self._show_history),
             ("Settings", self._show_settings),
         ]
         playlist_action: QAction | None = None
@@ -424,9 +493,42 @@ class MainWindow(QMainWindow):
         dialog.exec()
 
     def _show_settings(self) -> None:
-        dialog = SettingsDialog(self.settings, self)
+        dialog = PreferencesWindow(self.settings, self)
         if dialog.exec():
             self._apply_always_on_top(bool(self.settings.get("window.always_on_top", False)))
+
+    def _show_welcome(self) -> None:
+        if self.playlist.current_item() is not None:
+            return
+        self.welcome_window = WelcomeWindow(self.history, self)
+        self.welcome_window.openFiles.connect(lambda files: (self.open_files(files, False), self.welcome_window.close()))
+        self.welcome_window.openUrl.connect(lambda: self._show_url_dialog(""))
+        self.welcome_window.show()
+
+    def _show_history(self) -> None:
+        self.history_window = HistoryWindow(self.history, self)
+        self.history_window.openSource.connect(lambda source: self.open_files([Path(source)], False))
+        self.history_window.show()
+
+    def _show_inspector(self) -> None:
+        current = self.playlist.current_item()
+        if current is None:
+            return
+        self.inspector_window = InspectorWindow(self.player, current.source, self)
+        self.inspector_window.show()
+
+    def _show_filters(self) -> None:
+        self.filters_window = FiltersWindow(self)
+        self.filters_window.applyFilter.connect(self.player.add_filter)
+        self.filters_window.removeFilter.connect(self.player.remove_filter)
+        self.filters_window.show()
+
+    def _apply_quick_setting(self, key: str, value: object) -> None:
+        if key == "crop":
+            if value: self.player.add_filter("video", f"crop={value}")
+            return
+        if key == "video-rotate": value = int(value)
+        self.player.set_property(key, value)
 
     def _choose_files(self) -> None:
         files, _ = QFileDialog.getOpenFileNames(self, "Open Media", str(self.settings.get("paths.last_open_dir", Path.home())))
@@ -478,9 +580,9 @@ class MainWindow(QMainWindow):
             self.player.change_volume(5)
         elif key == Qt.Key.Key_Down:
             self.player.change_volume(-5)
-        elif key == Qt.Key.Key_M:
+        elif key == Qt.Key.Key_M and not modifiers & Qt.KeyboardModifier.ControlModifier:
             self.player.toggle_mute()
-        elif key == Qt.Key.Key_Control:
+        elif key == Qt.Key.Key_M and modifiers & Qt.KeyboardModifier.ControlModifier:
             self._toggle_mini_mode()
         elif key in {Qt.Key.Key_Return, Qt.Key.Key_Enter}:
             if not self.isFullScreen():
@@ -490,7 +592,8 @@ class MainWindow(QMainWindow):
         elif key == Qt.Key.Key_C:
             self._toggle_cover_mode()
         elif key == Qt.Key.Key_Escape:
-            self._pause_and_minimize()
+            if self.isFullScreen():
+                self._toggle_fullscreen()
         elif key == Qt.Key.Key_P:
             self._toggle_playlist()
         elif key == Qt.Key.Key_T:
@@ -545,9 +648,8 @@ class MainWindow(QMainWindow):
         self.setMaximumHeight(16777215)
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
         self.showNormal()
-        screen = self.screen() or QApplication.primaryScreen()
-        available = screen.availableGeometry() if screen is not None else QRect(0, 0, DEFAULT_WINDOW_SIZE[0], TITLE_BAR_HEIGHT + CONTROL_BAR_HEIGHT)
-        self.setGeometry(available.left(), available.top(), available.width(), TITLE_BAR_HEIGHT + CONTROL_BAR_HEIGHT)
+        geometry = self._pre_mini_geometry if self._pre_mini_geometry.isValid() else self.geometry()
+        self.setGeometry(geometry.left(), geometry.top(), 640, TITLE_BAR_HEIGHT + CONTROL_BAR_HEIGHT)
         self.control_bar.set_fullscreen(False)
         self._chrome_visible = True
         self._position_overlays()
@@ -619,14 +721,25 @@ class MainWindow(QMainWindow):
         return False
 
     def _toggle_pip(self) -> None:
-        if self.pip_window is None:
-            self.pip_window = PiPWindow(self)
-            self.pip_window.show()
-            self.osd.show_message("Picture in Picture: On")
+        self._pip_mode = not self._pip_mode
+        if self._pip_mode:
+            self._pre_pip_geometry = self.geometry()
+            self.playlist_panel.hide(); self.title_bar.hide(); self.control_bar.hide()
+            self.setMinimumSize(240, 140); self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+            screen = self.screen() or QApplication.primaryScreen(); area = screen.availableGeometry() if screen else QRect(0, 0, 1280, 720)
+            self.showNormal(); self.setGeometry(area.right() - 380, area.bottom() - 230, 360, 210)
         else:
-            self.pip_window.close()
-            self.pip_window = None
-            self.osd.show_message("Picture in Picture: Off")
+            self.setMinimumSize(*MIN_WINDOW_SIZE); self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, bool(self.settings.get("window.always_on_top", False))); self.showNormal()
+            if self._pre_pip_geometry.isValid(): self.setGeometry(self._pre_pip_geometry)
+            self._show_player_chrome()
+        self._position_overlays(); self.raise_(); self.activateWindow()
+        self.osd.show_message(f"Picture in Picture: {'On' if self._pip_mode else 'Off'}")
+
+    def _video_clicked(self) -> None:
+        if self._pip_mode:
+            self._toggle_pip()
+        else:
+            self._animate_player_chrome(not self._chrome_visible)
 
     def _toggle_always_on_top(self) -> None:
         self._apply_always_on_top(not bool(self.settings.get("window.always_on_top", False)))
@@ -651,6 +764,8 @@ class MainWindow(QMainWindow):
         self.playlist_panel.refresh(self.playlist.items, self.playlist.current_index)
 
     def _show_controls(self) -> None:
+        if self._pip_mode:
+            return
         self._show_player_chrome()
         if self._is_playing and not self._mini_mode:
             self._schedule_hide_player_chrome(3000)
@@ -693,8 +808,11 @@ class MainWindow(QMainWindow):
     def _animate_player_chrome(self, show: bool) -> None:
         if self.central_shell is None or self.isMinimized():
             return
+        if self._pip_mode:
+            self.app_menu_bar.hide(); self.title_bar.hide(); self.control_bar.hide(); return
         if self._mini_mode:
             self._chrome_visible = True
+            self.app_menu_bar.show()
             self.title_bar.show()
             self.control_bar.show()
             self.title_bar.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
@@ -708,24 +826,35 @@ class MainWindow(QMainWindow):
         if self._chrome_animation is not None:
             self._chrome_animation.stop()
         self._chrome_visible = show
+        if show:
+            self.app_menu_bar.show()
         shell_rect = self.central_shell.rect()
+        osc_position = str(self.settings.get("ui.osc_position", "floating"))
         start_title = self.title_bar.geometry()
+        start_menu = self.app_menu_bar.geometry()
         start_control = self.control_bar.geometry()
         if not start_title.isValid() or start_title.width() != shell_rect.width():
             start_title = QRect(0, 0 if show else -TITLE_BAR_HEIGHT, shell_rect.width(), TITLE_BAR_HEIGHT)
+        if not start_menu.isValid() or start_menu.width() != shell_rect.width():
+            start_menu = QRect(0, TITLE_BAR_HEIGHT if show else -APP_MENU_HEIGHT, shell_rect.width(), APP_MENU_HEIGHT)
         if not start_control.isValid() or start_control.width() != shell_rect.width():
             y = shell_rect.height() - CONTROL_BAR_HEIGHT if show else shell_rect.height()
             start_control = QRect(0, y, shell_rect.width(), CONTROL_BAR_HEIGHT)
         target_title = QRect(0, 0 if show else -TITLE_BAR_HEIGHT, shell_rect.width(), TITLE_BAR_HEIGHT)
-        target_control = QRect(0, shell_rect.height() - CONTROL_BAR_HEIGHT if show else shell_rect.height(), shell_rect.width(), CONTROL_BAR_HEIGHT)
+        target_menu = QRect(0, TITLE_BAR_HEIGHT if show else -APP_MENU_HEIGHT, shell_rect.width(), APP_MENU_HEIGHT)
+        if osc_position == "top":
+            target_control = QRect(0, TITLE_BAR_HEIGHT if show else -CONTROL_BAR_HEIGHT, shell_rect.width(), CONTROL_BAR_HEIGHT)
+        else:
+            target_control = QRect(0, shell_rect.height() - CONTROL_BAR_HEIGHT if show else shell_rect.height(), shell_rect.width(), CONTROL_BAR_HEIGHT)
         self.title_bar.show()
         self.control_bar.show()
         self.title_bar.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, not show)
         self.control_bar.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, not show)
         self.title_bar.raise_()
+        self.app_menu_bar.raise_()
         self.control_bar.raise_()
         group = QParallelAnimationGroup(self)
-        for widget, start, target in ((self.title_bar, start_title, target_title), (self.control_bar, start_control, target_control)):
+        for widget, start, target in ((self.title_bar, start_title, target_title), (self.app_menu_bar, start_menu, target_menu), (self.control_bar, start_control, target_control)):
             animation = QPropertyAnimation(widget, b"geometry", group)
             animation.setDuration(180 if show else 220)
             animation.setEasingCurve(QEasingCurve.Type.OutCubic if show else QEasingCurve.Type.InCubic)
@@ -735,12 +864,14 @@ class MainWindow(QMainWindow):
 
         def finish() -> None:
             if not show:
+                self.app_menu_bar.hide()
                 self.title_bar.hide()
                 self.control_bar.hide()
             else:
                 self.title_bar.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
                 self.control_bar.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
                 self.title_bar.raise_()
+                self.app_menu_bar.raise_()
                 self.control_bar.raise_()
             self._chrome_animation = None
 
@@ -751,21 +882,37 @@ class MainWindow(QMainWindow):
     def _position_overlays(self) -> None:
         if self.central_shell is not None:
             shell_rect = self.central_shell.rect()
-            self.video.setGeometry(shell_rect)
-            if self._chrome_animation is None:
+            osc_position = str(self.settings.get("ui.osc_position", "floating"))
+            if self._pip_mode:
+                self.video.setGeometry(shell_rect); self.app_menu_bar.hide(); self.title_bar.hide(); self.control_bar.hide()
+            elif self._mini_mode:
+                self.video.setGeometry(QRect())
+            elif osc_position == "bottom":
+                self.video.setGeometry(0, TITLE_BAR_HEIGHT, shell_rect.width(), max(0, shell_rect.height() - TITLE_BAR_HEIGHT - CONTROL_BAR_HEIGHT))
+            elif osc_position == "top":
+                self.video.setGeometry(0, TITLE_BAR_HEIGHT + CONTROL_BAR_HEIGHT, shell_rect.width(), max(0, shell_rect.height() - TITLE_BAR_HEIGHT - CONTROL_BAR_HEIGHT))
+            else:
+                self.video.setGeometry(shell_rect)
+            if self._chrome_animation is None and not self._pip_mode:
                 if self._mini_mode:
                     title_y = 0
+                    menu_y = TITLE_BAR_HEIGHT
                     control_y = TITLE_BAR_HEIGHT
                     self._chrome_visible = True
                 else:
                     title_y = 0 if self._chrome_visible else -TITLE_BAR_HEIGHT
-                    control_y = shell_rect.height() - CONTROL_BAR_HEIGHT if self._chrome_visible else shell_rect.height()
+                    menu_y = TITLE_BAR_HEIGHT if self._chrome_visible else -APP_MENU_HEIGHT
+                    if osc_position == "top": control_y = TITLE_BAR_HEIGHT if self._chrome_visible else -CONTROL_BAR_HEIGHT
+                    else: control_y = shell_rect.height() - CONTROL_BAR_HEIGHT if self._chrome_visible else shell_rect.height()
                 self.title_bar.setGeometry(0, title_y, shell_rect.width(), TITLE_BAR_HEIGHT)
+                if self.app_menu_bar is not None: self.app_menu_bar.setGeometry(0, menu_y, shell_rect.width(), APP_MENU_HEIGHT)
                 self.control_bar.setGeometry(0, control_y, shell_rect.width(), CONTROL_BAR_HEIGHT)
                 self.title_bar.setVisible((self._chrome_visible or self._mini_mode) and not self.isMinimized())
                 self.control_bar.setVisible((self._chrome_visible or self._mini_mode) and not self.isMinimized())
+                if self.app_menu_bar is not None: self.app_menu_bar.setVisible((self._chrome_visible or self._mini_mode) and not self.isMinimized() and not self._pip_mode)
                 if self._chrome_visible and not self.isMinimized():
                     self.title_bar.raise_()
+                    if self.app_menu_bar is not None: self.app_menu_bar.raise_()
                     self.control_bar.raise_()
         rect = self.video.rect()
         panel_width = min(PLAYLIST_PANEL_WIDTH, rect.width())
@@ -777,6 +924,8 @@ class MainWindow(QMainWindow):
                 self.title_bar.raise_()
                 self.control_bar.raise_()
         self.drop_overlay.setGeometry(rect)
+        self.buffering_indicator.adjustSize()
+        self.buffering_indicator.move((rect.width() - self.buffering_indicator.width()) // 2, (rect.height() - self.buffering_indicator.height()) // 2)
         if self.osd.isVisible():
             self.osd.adjustSize()
             self.osd.move((rect.width() - self.osd.width()) // 2, max(56, rect.height() // 2 - 28))

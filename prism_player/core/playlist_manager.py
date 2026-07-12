@@ -77,6 +77,20 @@ class PlaylistManager(QObject):
             return
         item = self.items.pop(source_index)
         self.items.insert(target_index, item)
+        if self.current_index == source_index: self.current_index = target_index
+        elif source_index < self.current_index <= target_index: self.current_index -= 1
+        elif target_index <= self.current_index < source_index: self.current_index += 1
+        self.playlistChanged.emit()
+
+    def sort_items(self, mode: str) -> None:
+        current = self.current_item(); reverse = mode.endswith("↓")
+        key = (lambda item: item.source.casefold()) if mode.startswith("Full path") else (lambda item: item.title.casefold())
+        self.items.sort(key=key, reverse=reverse)
+        self.current_index = self.items.index(current) if current in self.items else -1
+        self.playlistChanged.emit()
+
+    def insert_next(self, item: PlaylistItem) -> None:
+        self.items.insert(min(len(self.items), max(0, self.current_index + 1)), item)
         self.playlistChanged.emit()
 
     def current_item(self) -> PlaylistItem | None:

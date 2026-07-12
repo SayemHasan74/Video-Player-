@@ -11,6 +11,7 @@ class VideoWidget(QWidget):
     """Black video surface that emits high-level input signals."""
 
     doubleClicked = pyqtSignal()
+    clicked = pyqtSignal()
     rightClicked = pyqtSignal(QPoint)
     scrolled = pyqtSignal(int)
     mouseMoved = pyqtSignal()
@@ -32,6 +33,8 @@ class VideoWidget(QWidget):
             self.rightClicked.emit(event.globalPosition().toPoint())
         elif event.button() == Qt.MouseButton.MiddleButton:
             self.scrolled.emit(0)
+        elif event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
         super().mousePressEvent(event)
 
     def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:

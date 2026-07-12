@@ -8,12 +8,12 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
-APP_NAME = "Comet Player"
-APP_SHORT_NAME = "Comet"
-APP_VERSION = "1.0.0"
+APP_NAME = "Comet V2"
+APP_SHORT_NAME = "Comet V2"
+APP_VERSION = "2.0.0-dev"
 
 DEFAULT_WINDOW_SIZE = (1100, 680)
-MIN_WINDOW_SIZE = (640, 400)
+MIN_WINDOW_SIZE = (285, 120)
 TITLE_BAR_HEIGHT = 40
 CONTROL_BAR_HEIGHT = 68
 PLAYLIST_PANEL_WIDTH = 280
@@ -57,7 +57,7 @@ SUBTITLE_EXTENSIONS: frozenset[str] = frozenset({".ass", ".srt", ".ssa", ".sub",
 def app_data_dir() -> Path:
     """Return the per-user settings directory."""
     root = Path.home() / "AppData" / "Roaming" if (Path.home() / "AppData").exists() else Path.home()
-    path = root / "CometPlayer"
+    path = root / "CometV2"
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -80,6 +80,10 @@ def default_settings() -> dict[str, Any]:
                 "speed": 1.0,
                 "remember_position": True,
                 "cover_mode": False,
+                "open_behavior": "replace",
+                "auto_resize": True,
+                "auto_music_mode": True,
+                "audio_only_override": False,
             },
             "paths": {
                 "screenshot_dir": str(Path.home() / "Desktop"),
@@ -87,11 +91,33 @@ def default_settings() -> dict[str, Any]:
             },
             "ui": {
                 "hide_controls_while_playing": True,
+                "osc_position": "floating",
+                "osc_hide_delay_ms": 3000,
+                "osc_toolbar": ["playlist", "subtitle", "audio", "screenshot", "pip", "music", "fullscreen"],
+                "sidebar_side": "right",
+                "sidebar_width": 320,
+                "sidebar_tab": "playlist",
                 "show_playlist": False,
+                "show_osd": True,
+                "animations": True,
+                "theme": "dark",
+            },
+            "music_mode": {"show_playlist": False, "show_album_art": True},
+            "video": {"hwdec": "auto-safe", "aspect": "auto", "rotation": 0},
+            "audio": {"device": "auto", "gapless": False},
+            "subtitle": {
+                "autoload": True, "encoding": "auto", "font": "Segoe UI",
+                "size": 42, "color": "#ffffff", "outline": 2, "position": 100,
             },
             "network": {
                 "preferred_format": "bestvideo+bestaudio/best",
+                "proxy": "",
+                "user_agent": "",
             },
+            "thumbnails": {"enabled": True, "samples": 100, "cache_mb": 512},
+            "startup": {"show_welcome": True, "reopen_last": False},
+            "advanced": {"mpv_options": ""},
+            "keys": {"profile": "Default"},
         }
     )
 

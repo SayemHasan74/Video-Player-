@@ -21,6 +21,8 @@ class PlayerBackend(QObject):
     volumeChanged = pyqtSignal(int, bool)
     speedChanged = pyqtSignal(float)
     tracksChanged = pyqtSignal(list, list)
+    chaptersChanged = pyqtSignal(list)
+    bufferingChanged = pyqtSignal(bool)
     fileEnded = pyqtSignal()
     loaded = pyqtSignal(str)
     error = pyqtSignal(str)
@@ -38,6 +40,7 @@ class PlayerBackend(QObject):
         self._muted = False
         self._speed = 1.0
         self._ended_emitted = False
+        self._buffering = False
         self._load_mpv(video_widget)
         self.poll_timer = QTimer(self)
         self.poll_timer.setInterval(250)
@@ -64,6 +67,7 @@ class PlayerBackend(QObject):
             self.is_loaded = True
             self.loaded.emit(source)
             QTimer.singleShot(120, lambda: self.set_paused(False))
+            QTimer.singleShot(400, self._emit_chapters)
         except Exception as exc:
             self.logger.exception("Could not load media")
             self.error.emit(f"Could not open file: {exc}")
@@ -151,6 +155,32 @@ class PlayerBackend(QObject):
         """Select audio track."""
         if self.mpv is not None:
             self.mpv.aid = track_id
+
+    def set_secondary_subtitle_track(self, track_id: int | str) -> None:
+        if self.mpv is not None:
+            self.mpv.secondary_sid = track_id
+
+    def set_property(self, name: str, value: Any) -> None:
+        """Set an arbitrary live mpv property from reactive settings panels."""
+        if self.mpv is not None:
+            self.mpv._set_property(name, value)
+
+    def get_property(self, name: str, fallback: Any = None) -> Any:
+        if self.mpv is None:
+            return fallback
+        try:
+            value = self.mpv._get_property(name)
+            return fallback if value is None else value
+        except Exception:
+            return fallback
+
+    def add_filter(self, kind: str, value: str) -> None:
+        if self.mpv is not None:
+            self.mpv.command("vf" if kind == "video" else "af", "add", value)
+
+    def remove_filter(self, kind: str, value: str) -> None:
+        if self.mpv is not None:
+            self.mpv.command("vf" if kind == "video" else "af", "remove", value)
 
     def load_subtitle(self, path: Path) -> None:
         """Load external subtitle."""
@@ -247,6 +277,9 @@ class PlayerBackend(QObject):
             position = float(self.mpv.time_pos or 0.0)
             duration = float(self.mpv.duration or 0.0)
             paused = bool(self.mpv.pause)
+            buffering = bool(getattr(self.mpv, "paused_for_cache", False))
+            if buffering != self._buffering:
+                self._buffering = buffering; self.bufferingChanged.emit(buffering)
             if abs(position - self._position) > 0.1:
                 self._position = position
                 self.timeChanged.emit(position)
@@ -273,6 +306,11 @@ class PlayerBackend(QObject):
             if target is not None:
                 target.append(track)
         self.tracksChanged.emit(audio_tracks, subtitle_tracks)
+
+    def _emit_chapters(self) -> None:
+        if self.mpv is None: return
+        try: self.chaptersChanged.emit(getattr(self.mpv, "chapter_list", None) or [])
+        except Exception: self.chaptersChanged.emit([])
 
     def _mpv_log(self, level: str, prefix: str, text: str) -> None:
         """Forward mpv logs."""

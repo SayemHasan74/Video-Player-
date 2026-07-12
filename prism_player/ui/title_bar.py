@@ -75,8 +75,8 @@ class TitleBar(QWidget):
 
     def set_title(self, title: str) -> None:
         """Set currently playing title."""
-        self.title_label.setText("")
-        self.title_label.hide()
+        self.title_label.setText(title)
+        self.title_label.show()
 
     def set_maximized(self, maximized: bool) -> None:
         """Update maximize icon."""

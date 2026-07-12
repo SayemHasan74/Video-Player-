@@ -24,8 +24,16 @@ class OSDLabel(QLabel):
         self.timer.setSingleShot(True)
         self.timer.timeout.connect(self.hide)
         self.hide()
+        self.enabled = True
+
+    def set_enabled(self, enabled: bool) -> None:
+        self.enabled = enabled
+        if not enabled:
+            self.hide()
 
     def show_message(self, text: str, level: str = "info", duration: int = 2200) -> None:
+        if not self.enabled:
+            return
         self.setText(text)
         background = self.COLORS.get(level, self.COLORS["info"])
         self.setStyleSheet(

@@ -68,6 +68,30 @@ class HistoryManager:
             return position
         return 0.0
 
+    def entries(self, query: str = "") -> list[dict]:
+        """Return recent history rows for welcome/history views."""
+        sql = "SELECT source,title,position,duration,updated_at FROM playback_history"
+        params: tuple[str, ...] = ()
+        if query:
+            sql += " WHERE title LIKE ? OR source LIKE ?"
+            needle = f"%{query}%"
+            params = (needle, needle)
+        sql += " ORDER BY updated_at DESC"
+        try:
+            rows = self.connection.execute(sql, params).fetchall()
+        except sqlite3.Error as exc:
+            self.logger.warning("Could not list history: %s", exc)
+            return []
+        return [dict(zip(("source", "title", "position", "duration", "updated_at"), row)) for row in rows]
+
+    def remove(self, source: str) -> None:
+        self.connection.execute("DELETE FROM playback_history WHERE source=?", (source,))
+        self.connection.commit()
+
+    def clear(self) -> None:
+        self.connection.execute("DELETE FROM playback_history")
+        self.connection.commit()
+
     def close(self) -> None:
         """Close the database."""
         self.connection.close()
