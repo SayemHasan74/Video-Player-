@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from PyQt6.QtCore import QRectF, Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QLinearGradient, QPainter, QPen
+from PyQt6.QtCore import QPoint, QRectF, Qt, pyqtSignal
+from PyQt6.QtGui import QColor, QLinearGradient, QMouseEvent, QPainter
 from PyQt6.QtWidgets import QSlider
 
 
@@ -21,66 +21,60 @@ class LightBeamSlider(QSlider):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         width = max(1, self.width())
         height = max(1, self.height())
-        left = 10.0
-        right = width - 10.0
+        left = 5.0
+        right = width - 5.0
         center_y = height / 2
         track_width = max(1.0, right - left)
         value_range = max(1, self.maximum() - self.minimum())
         progress = (self.value() - self.minimum()) / value_range
         progress_x = left + track_width * max(0.0, min(1.0, progress))
 
-        base = QRectF(left, center_y - 2.0, track_width, 4.0)
+        # Recessed neutral rail.
+        base = QRectF(left, center_y - 1.5, track_width, 3.0)
         painter.setPen(Qt.PenStyle.NoPen)
         base_gradient = QLinearGradient(base.left(), base.top(), base.left(), base.bottom())
-        base_gradient.setColorAt(0.0, QColor(255, 255, 255, 34))
-        base_gradient.setColorAt(0.5, QColor(255, 255, 255, 18))
-        base_gradient.setColorAt(1.0, QColor(0, 0, 0, 38))
+        base_gradient.setColorAt(0.0, QColor(255, 255, 255, 28))
+        base_gradient.setColorAt(0.5, QColor(255, 255, 255, 14))
+        base_gradient.setColorAt(1.0, QColor(0, 0, 0, 70))
         painter.setBrush(base_gradient)
-        painter.drawRoundedRect(base, 2.0, 2.0)
+        painter.drawRoundedRect(base, 1.5, 1.5)
 
-        if progress_x > left:
-            glow = QRectF(left - 8.0, center_y - 6.0, progress_x - left + 18.0, 12.0)
-            glow_gradient = QLinearGradient(glow.left(), center_y, glow.right(), center_y)
-            glow_gradient.setColorAt(0.0, QColor(255, 255, 255, 44))
-            glow_gradient.setColorAt(0.68, QColor(255, 255, 255, 112))
-            glow_gradient.setColorAt(1.0, QColor(255, 255, 255, 0))
-            painter.setBrush(glow_gradient)
-            painter.drawRoundedRect(glow, 6.0, 6.0)
+        if progress_x <= left:
+            return
 
-            beam = QRectF(left, center_y - 1.25, progress_x - left, 2.5)
-            beam_gradient = QLinearGradient(beam.left(), beam.top(), beam.left(), beam.bottom())
-            beam_gradient.setColorAt(0.0, QColor(255, 255, 255, 210))
-            beam_gradient.setColorAt(0.45, QColor(255, 255, 255, 255))
-            beam_gradient.setColorAt(1.0, QColor(210, 210, 210, 122))
-            painter.setBrush(beam_gradient)
-            painter.drawRoundedRect(beam, 1.25, 1.25)
+        # Diffuse halo: strongest near the live edge, fading cleanly outward.
+        glow = QRectF(left, center_y - 5.0, progress_x - left + 7.0, 10.0)
+        glow_vertical = QLinearGradient(0, glow.top(), 0, glow.bottom())
+        glow_vertical.setColorAt(0.0, QColor(255, 255, 255, 0))
+        glow_vertical.setColorAt(0.5, QColor(255, 255, 255, 48))
+        glow_vertical.setColorAt(1.0, QColor(255, 255, 255, 0))
+        painter.setBrush(glow_vertical)
+        painter.drawRoundedRect(glow, 5.0, 5.0)
 
-            hot_spot = QRectF(max(left, progress_x - 28.0), center_y - 1.0, min(28.0, progress_x - left), 2.0)
-            hot_gradient = QLinearGradient(hot_spot.left(), center_y, hot_spot.right(), center_y)
-            hot_gradient.setColorAt(0.0, QColor(255, 255, 255, 0))
-            hot_gradient.setColorAt(1.0, QColor(255, 255, 255, 230))
-            painter.setBrush(hot_gradient)
-            painter.drawRoundedRect(hot_spot, 1.0, 1.0)
+        beam = QRectF(left, center_y - 1.0, progress_x - left, 2.0)
+        beam_horizontal = QLinearGradient(beam.left(), center_y, beam.right(), center_y)
+        beam_horizontal.setColorAt(0.0, QColor(170, 174, 180, 115))
+        beam_horizontal.setColorAt(0.72, QColor(235, 240, 247, 215))
+        beam_horizontal.setColorAt(1.0, QColor(255, 255, 255, 245))
+        painter.setBrush(beam_horizontal)
+        painter.drawRoundedRect(beam, 1.0, 1.0)
 
-            reflection = QRectF(left, center_y + 3.0, progress_x - left, 2.4)
-            reflection_gradient = QLinearGradient(reflection.left(), reflection.top(), reflection.left(), reflection.bottom())
-            reflection_gradient.setColorAt(0.0, QColor(255, 255, 255, 58))
-            reflection_gradient.setColorAt(1.0, QColor(255, 255, 255, 0))
-            painter.setBrush(reflection_gradient)
-            painter.drawRoundedRect(reflection, 1.2, 1.2)
-
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(255, 255, 255, 42))
-        painter.drawEllipse(QRectF(progress_x - 7.0, center_y - 7.0, 14.0, 14.0))
-        painter.setPen(QPen(QColor(255, 255, 255, 205), 0.8))
-        painter.setBrush(QColor(255, 255, 255, 238))
-        painter.drawEllipse(QRectF(progress_x - 3.2, center_y - 3.2, 6.4, 6.4))
+        # Small soft live edge, shown without a conventional slider knob.
+        edge = QRectF(progress_x - 5.0, center_y - 3.5, 10.0, 7.0)
+        edge_gradient = QLinearGradient(edge.left(), center_y, edge.right(), center_y)
+        edge_gradient.setColorAt(0.0, QColor(255, 255, 255, 0))
+        edge_gradient.setColorAt(0.5, QColor(255, 255, 255, 135))
+        edge_gradient.setColorAt(1.0, QColor(255, 255, 255, 0))
+        painter.setBrush(edge_gradient)
+        painter.drawRoundedRect(edge, 3.5, 3.5)
 
 
 class SeekBar(LightBeamSlider):
     """Position slider with second-based signal."""
 
     seekRequested = pyqtSignal(float)
+    hoverRequested = pyqtSignal(float, QPoint)
+    hoverEnded = pyqtSignal()
 
     def __init__(self, parent: object | None = None) -> None:
         super().__init__(parent)
@@ -110,3 +104,12 @@ class SeekBar(LightBeamSlider):
     def _moved(self, value: int) -> None:
         if self.duration > 0:
             self.seekRequested.emit((value / 1000) * self.duration)
+
+    def mouseMoveEvent(self,event:QMouseEvent)->None:
+        super().mouseMoveEvent(event)
+        if self.duration>0:
+            ratio=max(0.0,min(1.0,event.position().x()/max(1,self.width())))
+            self.hoverRequested.emit(ratio*self.duration,event.position().toPoint())
+
+    def leaveEvent(self,event:object)->None:
+        self.hoverEnded.emit(); super().leaveEvent(event)

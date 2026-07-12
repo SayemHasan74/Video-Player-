@@ -8,12 +8,12 @@ from pathlib import Path
 from PyQt6.QtCore import QTimer, Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QFileDialog, QFormLayout, QHBoxLayout, QLabel,
-    QLineEdit, QListWidget, QListWidgetItem, QPushButton, QSpinBox, QStackedWidget,
+    QInputDialog, QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPushButton, QSpinBox, QStackedWidget,
     QTabWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 from config.settings import APP_VERSION, SettingsStore, app_data_dir
-from core.keybindings import KeyBindingStore
+from core.keybindings import BUILTIN_PROFILES, KeyBindingStore
 from core.media_probe import probe_media
 
 
@@ -140,7 +140,7 @@ class PreferencesWindow(QDialog):
             "Advanced": [("Raw mpv options", "advanced.mpv_options", "text")],
         }.get(name, [])
         if name == "Key Bindings":
-            combo = QComboBox(); combo.addItems(self.keys.profile_names()); combo.setCurrentText(str(self.settings.get("keys.profile", "Default"))); self.controls["keys.profile"] = combo; form.addRow("Profile", combo)
+            editor=KeyBindingsEditor(self.keys,str(self.settings.get("keys.profile","Default"))); self.controls["keys.profile"] = editor.profile; form.addRow(editor)
         elif name == "Utilities":
             reveal = QPushButton("Reveal config folder"); reveal.clicked.connect(lambda: __import__('os').startfile(app_data_dir())); form.addRow(reveal)
         for label, key, kind in specs:
@@ -164,3 +164,33 @@ class PreferencesWindow(QDialog):
             else: value = widget.text()
             self.settings.set(key, value)
         self.settings.save(); self.accept()
+
+
+class KeyBindingsEditor(QWidget):
+    def __init__(self, store: KeyBindingStore, profile: str) -> None:
+        super().__init__(); self.store=store; self.profile=QComboBox(); self.profile.addItems(store.profile_names()); self.profile.setCurrentText(profile); self.table=QTableWidget(0,2); self.table.setHorizontalHeaderLabels(["Shortcut","Action"]); add=QPushButton("Add"); remove=QPushButton("Remove"); duplicate=QPushButton("Duplicate profile"); save=QPushButton("Save"); reload_button=QPushButton("Reload"); reveal=QPushButton("Reveal files")
+        top=QHBoxLayout(); top.addWidget(QLabel("Profile")); top.addWidget(self.profile); buttons=QHBoxLayout()
+        for button in (add,remove,duplicate,save,reload_button,reveal):buttons.addWidget(button)
+        layout=QVBoxLayout(self); layout.addLayout(top); layout.addWidget(self.table); layout.addLayout(buttons)
+        self.profile.currentTextChanged.connect(self.reload); add.clicked.connect(self._add); remove.clicked.connect(lambda:self.table.removeRow(self.table.currentRow()) if self.table.currentRow()>=0 else None); duplicate.clicked.connect(self._duplicate); save.clicked.connect(self._save); reload_button.clicked.connect(lambda:self.reload(self.profile.currentText())); reveal.clicked.connect(lambda:__import__('os').startfile(self.store.directory)); self.reload(profile)
+    def reload(self,name:str)->None:
+        bindings=self.store.load(name); self.table.setRowCount(0)
+        for key,action in bindings.items():
+            row=self.table.rowCount(); self.table.insertRow(row); self.table.setItem(row,0,QTableWidgetItem(key)); self.table.setItem(row,1,QTableWidgetItem(action))
+        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers if name in BUILTIN_PROFILES else QTableWidget.EditTrigger.AllEditTriggers)
+    def _add(self)->None:
+        if self.profile.currentText() in BUILTIN_PROFILES:return
+        row=self.table.rowCount(); self.table.insertRow(row); self.table.setItem(row,0,QTableWidgetItem("Ctrl+Shift+K")); self.table.setItem(row,1,QTableWidgetItem("play_pause"))
+    def _duplicate(self)->None:
+        name,ok=QInputDialog.getText(self,"Duplicate Profile","New profile name:")
+        if ok and name.strip(): self.store.duplicate(self.profile.currentText(),name.strip()); self.profile.addItem(name.strip()); self.profile.setCurrentText(name.strip())
+    def _save(self)->None:
+        name=self.profile.currentText()
+        if name in BUILTIN_PROFILES:return
+        bindings={}; actions=set()
+        for row in range(self.table.rowCount()):
+            key=(self.table.item(row,0).text() if self.table.item(row,0) else "").strip(); action=(self.table.item(row,1).text() if self.table.item(row,1) else "").strip()
+            if not key or not action:continue
+            if key in bindings: QMessageBox.warning(self,"Shortcut conflict",f"{key} is assigned more than once.");return
+            bindings[key]=action;actions.add(action)
+        self.store.save(name,bindings)

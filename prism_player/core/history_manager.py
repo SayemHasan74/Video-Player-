@@ -35,7 +35,7 @@ class HistoryManager:
 
     def save_position(self, source: str, title: str, position: float, duration: float) -> None:
         """Persist playback position."""
-        if duration <= 30 or position < 5 or position >= duration - 10:
+        if duration <= 30 or position < 5:
             return
         try:
             self.connection.execute(
@@ -48,7 +48,7 @@ class HistoryManager:
                     duration=excluded.duration,
                     updated_at=CURRENT_TIMESTAMP
                 """,
-                (source, title, float(position), float(duration)),
+                (source, title, min(float(position), float(duration)), float(duration)),
             )
             self.connection.commit()
         except sqlite3.Error as exc:

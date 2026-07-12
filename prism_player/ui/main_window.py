@@ -7,11 +7,12 @@ from datetime import datetime
 from pathlib import Path
 
 from PyQt6.QtCore import QEasingCurve, QEvent, QParallelAnimationGroup, QPoint, QPropertyAnimation, QRect, QThread, QTimer, Qt, pyqtSignal
-from PyQt6.QtGui import QAction, QCloseEvent, QCursor, QDragEnterEvent, QDropEvent, QIcon, QKeyEvent, QShortcut
-from PyQt6.QtWidgets import QApplication, QFileDialog, QLabel, QMainWindow, QMenu, QMenuBar, QWidget
+from PyQt6.QtGui import QAction, QCloseEvent, QCursor, QDragEnterEvent, QDropEvent, QIcon, QKeyEvent, QKeySequence, QPixmap, QShortcut
+from PyQt6.QtWidgets import QAbstractButton, QAbstractSpinBox, QApplication, QComboBox, QFileDialog, QLabel, QLineEdit, QMainWindow, QMenu, QMenuBar, QPlainTextEdit, QTextEdit, QWidget
 
 from config.settings import APP_NAME, CONTROL_BAR_HEIGHT, DEFAULT_WINDOW_SIZE, MIN_WINDOW_SIZE, PLAYLIST_PANEL_WIDTH, SettingsStore, TITLE_BAR_HEIGHT
 from core.history_manager import HistoryManager
+from core.keybindings import KeyBindingStore
 from core.player_backend import PlayerBackend
 from core.playlist_manager import PlaylistItem, PlaylistManager
 from core.url_resolver import UrlResolverWorker
@@ -29,6 +30,7 @@ from ui.video_widget import VideoWidget
 from utils.file_utils import is_media_file, is_probable_url, scan_media_files
 from core.media_probe import matching_subtitles
 from utils.time_utils import format_time
+from utils.thumbnail import ThumbnailWorker, trim_thumbnail_cache
 
 APP_MENU_HEIGHT = 32
 
@@ -56,6 +58,7 @@ class MainWindow(QMainWindow):
         self.history = history
         self.logger = logging.getLogger(__name__)
         self.playlist = PlaylistManager(self)
+        self.key_store=KeyBindingStore(); self._binding_shortcuts:list[QShortcut]=[]; self._menu_actions:dict[str,QAction]={}
         self.video = VideoWidget(self)
         self.title_bar = TitleBar(self)
         self.control_bar = ControlBar(self)
@@ -66,6 +69,7 @@ class MainWindow(QMainWindow):
         self.buffering_indicator.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.buffering_indicator.setStyleSheet("background: rgba(0,0,0,180); color: white; border-radius: 18px; padding: 10px 16px;")
         self.buffering_indicator.hide()
+        self.thumbnail_preview = QLabel(self.video); self.thumbnail_preview.setStyleSheet("background:#080808;border:1px solid #444;padding:3px;"); self.thumbnail_preview.hide()
         self.track_menus = TrackMenuFactory(self)
         self.pip_window: PiPWindow | None = None
         self.welcome_window: WelcomeWindow | None = None
@@ -100,10 +104,15 @@ class MainWindow(QMainWindow):
         self._hide_chrome_timer.timeout.connect(self._hide_player_chrome)
         self._current_duration = 0.0
         self._current_position = 0.0
+        self._loaded_playlist_item: PlaylistItem | None = None
+        self._thumbnail_worker: ThumbnailWorker | None = None
+        self._thumbnails: dict[float,str] = {}
+        self._thumbnail_signature: tuple[str,int] | None = None
         self._build_window()
         self.osd.set_enabled(bool(self.settings.get("ui.show_osd", True)))
         self.player = PlayerBackend(self.video, self)
         self._build_app_menu()
+        self._load_keybindings()
         self._position_overlays()
         self._connect_signals()
         self._restore_geometry()
@@ -177,6 +186,9 @@ class MainWindow(QMainWindow):
         self.settings.save()
         if self.pip_window is not None:
             self.pip_window.close()
+        self.playlist_panel.shutdown()
+        if self._thumbnail_worker and self._thumbnail_worker.isRunning():
+            self._thumbnail_worker.cancel(); self._thumbnail_worker.wait(2000)
         self.title_bar.close()
         self.control_bar.close()
         self.player.shutdown()
@@ -288,6 +300,8 @@ class MainWindow(QMainWindow):
         self.control_bar.nextClicked.connect(self._play_next)
         self.control_bar.previousClicked.connect(self._play_previous)
         self.control_bar.seekRequested.connect(self.player.seek_absolute)
+        self.control_bar.seekbar.hoverRequested.connect(self._show_thumbnail_preview)
+        self.control_bar.seekbar.hoverEnded.connect(self.thumbnail_preview.hide)
         self.control_bar.volumeChanged.connect(self.player.set_volume)
         self.control_bar.muteClicked.connect(self.player.toggle_mute)
         self.control_bar.volumeWheel.connect(self.player.change_volume)
@@ -311,6 +325,9 @@ class MainWindow(QMainWindow):
         self.playlist_panel.moveRequested.connect(self.playlist.move)
         self.playlist_panel.sortRequested.connect(self.playlist.sort_items)
         self.playlist_panel.playNextRequested.connect(self._queue_playlist_item_next)
+        self.playlist_panel.widthChanged.connect(self._sidebar_width_changed)
+        self.playlist_panel.tabChanged.connect(lambda name: self.settings.set("ui.sidebar_tab", name))
+        self.playlist_panel.keyPressed.connect(self._handle_key)
         self.player.timeChanged.connect(self._time_changed)
         self.player.durationChanged.connect(self._duration_changed)
         self.player.pauseStateChanged.connect(self.control_bar.set_paused)
@@ -332,6 +349,8 @@ class MainWindow(QMainWindow):
         QShortcut(Qt.Key.Key_Return, self, activated=lambda: None if self.isFullScreen() else self._toggle_fullscreen())
         QShortcut(Qt.Key.Key_Enter, self, activated=lambda: None if self.isFullScreen() else self._toggle_fullscreen())
         QShortcut(Qt.Key.Key_Escape, self, activated=lambda: self._toggle_fullscreen() if self.isFullScreen() else None)
+        paste_shortcut = QShortcut(QKeySequence.StandardKey.Paste, self, activated=self._paste_playlist_content)
+        paste_shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
 
     def _build_app_menu(self) -> None:
         bar = QMenuBar(self.central_shell)
@@ -340,24 +359,48 @@ class MainWindow(QMainWindow):
         bar.setAttribute(Qt.WidgetAttribute.WA_NativeWindow, True)
         bar.setStyleSheet("QMenuBar { background: #0d0d0d; color: #eeeeee; padding-left: 6px; } QMenuBar::item { padding: 7px 10px; background: transparent; } QMenuBar::item:selected { background: #242424; }")
         menus = {
-            "File": [("Open File…", self._choose_files), ("Open URL…", lambda: self._show_url_dialog("")), ("History", self._show_history), ("Quit", self.close)],
-            "Playback": [("Play/Pause", self.player.play_pause), ("Previous", self._play_previous), ("Next", self._play_next), ("A–B Loop", self._cycle_ab_loop)],
-            "Video": [("Fullscreen", self._toggle_fullscreen), ("Fit/Cover", self._toggle_cover_mode), ("Filters", self._show_filters), ("Inspector", self._show_inspector)],
-            "Audio": [("Audio Tracks", self._show_audio_menu), ("Mute", self.player.toggle_mute)],
-            "Subtitle": [("Subtitle Tracks", self._show_subtitle_menu), ("Find Online…", self._show_subtitle_finder)],
-            "Window": [("Playlist", self._toggle_playlist), ("Music Mode", self._toggle_mini_mode), ("Picture in Picture", self._toggle_pip), ("Always on Top", self._toggle_always_on_top), ("Preferences", self._show_settings)],
-            "Help": [("About Comet V2", lambda: self.osd.show_message("Comet V2 • IINA-inspired media player"))],
+            "File": [("Open File…","open_file",self._choose_files),("Open URL…","open_url",lambda:self._show_url_dialog("")),("History","history",self._show_history),("Quit","quit",self.close)],
+            "Playback": [("Play/Pause","play_pause",self.player.play_pause),("Previous","previous",self._play_previous),("Next","next",self._play_next),("A–B Loop","ab_loop",self._cycle_ab_loop)],
+            "Video": [("Fullscreen","fullscreen",self._toggle_fullscreen),("Fit/Cover","cover",self._toggle_cover_mode),("Filters","filters",self._show_filters),("Inspector","inspector",self._show_inspector)],
+            "Audio": [("Audio Tracks","audio_tracks",self._show_audio_menu),("Mute","mute",self.player.toggle_mute)],
+            "Subtitle": [("Subtitle Tracks","subtitle_tracks",self._show_subtitle_menu),("Find Online…","find_subtitles",self._show_subtitle_finder)],
+            "Window": [("Playlist","playlist",self._toggle_playlist),("Music Mode","music_mode",self._toggle_mini_mode),("Picture in Picture","pip",self._toggle_pip),("Always on Top","always_on_top",self._toggle_always_on_top),("Preferences","preferences",self._show_settings)],
+            "Help": [("About Comet V2","about",lambda:self.osd.show_message("Comet V2 • IINA-inspired media player"))],
         }
         for title, entries in menus.items():
             menu = bar.addMenu(title)
-            for label, callback in entries:
-                action = menu.addAction(label); action.triggered.connect(callback)
+            for label, action_id, callback in entries:
+                action = menu.addAction(label); action.triggered.connect(callback); self._menu_actions[action_id]=action
         bar.raise_()
 
+    def _action_callbacks(self) -> dict[str, object]:
+        return {"play_pause":self.player.play_pause,"seek_backward":lambda:self.player.seek_relative(-5),"seek_forward":lambda:self.player.seek_relative(5),"volume_up":lambda:self.player.change_volume(5),"volume_down":lambda:self.player.change_volume(-5),"mute":self.player.toggle_mute,"fullscreen":self._toggle_fullscreen,"exit_fullscreen":lambda:self._toggle_fullscreen() if self.isFullScreen() else None,"playlist":self._toggle_playlist,"always_on_top":self._toggle_always_on_top,"screenshot":self._save_screenshot,"open_file":self._choose_files,"open_url":lambda:self._show_url_dialog(""),"next":self._play_next,"previous":self._play_previous,"music_mode":self._toggle_mini_mode}
+
+    def _load_keybindings(self) -> None:
+        for shortcut in self._binding_shortcuts:shortcut.setEnabled(False);shortcut.deleteLater()
+        self._binding_shortcuts=[]; bindings=self.key_store.load(str(self.settings.get("keys.profile","Default"))); callbacks=self._action_callbacks(); reverse={}
+        for key,action_id in bindings.items():
+            callback=callbacks.get(action_id)
+            if callback:
+                reverse.setdefault(action_id,key)
+                if QKeySequence(key).matches(QKeySequence(Qt.Key.Key_Space)) == QKeySequence.SequenceMatch.ExactMatch:
+                    continue
+                shortcut=QShortcut(QKeySequence(key),self,activated=callback);shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut);self._binding_shortcuts.append(shortcut)
+        for action_id,action in self._menu_actions.items():action.setShortcut(QKeySequence(reverse.get(action_id,"")))
+
     def eventFilter(self, watched: object, event: QEvent) -> bool:
+        if event.type() == QEvent.Type.KeyPress and event.key() == Qt.Key.Key_Space and not event.isAutoRepeat():
+            focus = QApplication.focusWidget()
+            editing = isinstance(focus, (QLineEdit, QTextEdit, QPlainTextEdit, QAbstractSpinBox, QComboBox, QAbstractButton))
+            in_player = focus is None or focus is self or (focus is not None and (self.isAncestorOf(focus) or self._is_playlist_widget(focus)))
+            if QApplication.activeModalWidget() is None and in_player and not editing:
+                self.player.play_pause()
+                event.accept()
+                return True
         if event.type() == QEvent.Type.MouseButtonPress and self.playlist_panel.isVisible():
             widget = watched if isinstance(watched, QWidget) else None
-            if widget is not self.control_bar.playlist_button and not self._is_playlist_widget(widget):
+            inside_panel = self.playlist_panel.frameGeometry().contains(QCursor.pos())
+            if widget is not self.control_bar.playlist_button and not inside_panel and not self._is_playlist_widget(widget):
                 self._set_playlist_visible(False)
         if self._handle_window_edge_event(watched, event):
             return True
@@ -371,6 +414,11 @@ class MainWindow(QMainWindow):
         return super().eventFilter(watched, event)
 
     def _load_playlist_item(self, item: PlaylistItem) -> None:
+        previous=self._loaded_playlist_item
+        if previous is not None and previous.source!=item.source and self.settings.get("playback.remember_position",True):
+            self.history.save_position(previous.source,previous.title,self._current_position,self._current_duration)
+        self._loaded_playlist_item=item
+        self._current_position=0.0;self._current_duration=0.0
         if not item.is_url and not Path(item.source).exists():
             self.osd.show_message(f"File not found: {item.title}", "warning")
             self._play_next()
@@ -393,10 +441,28 @@ class MainWindow(QMainWindow):
     def _time_changed(self, seconds: float) -> None:
         self._current_position = seconds
         self.control_bar.set_time(self._current_position, self._current_duration)
+        current=self.playlist.current_item()
+        if current: self.playlist_panel.update_progress(current.source,self._current_position,self._current_duration)
 
     def _duration_changed(self, seconds: float) -> None:
         self._current_duration = seconds
         self.control_bar.set_time(self._current_position, self._current_duration)
+        current=self.playlist.current_item()
+        if current and not current.is_url and seconds>0 and self.settings.get("thumbnails.enabled",True): self._start_thumbnails(current.source,seconds)
+
+    def _start_thumbnails(self, source: str, duration: float) -> None:
+        signature=(source,round(duration))
+        if signature==self._thumbnail_signature:return
+        self._thumbnail_signature=signature
+        if self._thumbnail_worker and self._thumbnail_worker.isRunning(): self._thumbnail_worker.cancel(); self._thumbnail_worker.wait(500)
+        self._thumbnails={}; trim_thumbnail_cache(int(self.settings.get("thumbnails.cache_mb",512)))
+        self._thumbnail_worker=ThumbnailWorker(source,duration,int(self.settings.get("thumbnails.samples",100)),self); self._thumbnail_worker.thumbnailReady.connect(lambda timestamp,path:self._thumbnails.__setitem__(timestamp,path)); self._thumbnail_worker.start()
+
+    def _show_thumbnail_preview(self, seconds: float, point: QPoint) -> None:
+        if not self._thumbnails:return
+        timestamp=min(self._thumbnails,key=lambda value:abs(value-seconds)); pixmap=QPixmap(self._thumbnails[timestamp])
+        if pixmap.isNull():return
+        pixmap=pixmap.scaledToWidth(240,Qt.TransformationMode.SmoothTransformation); self.thumbnail_preview.setPixmap(pixmap); self.thumbnail_preview.adjustSize(); global_point=self.control_bar.seekbar.mapToGlobal(point); local=self.video.mapFromGlobal(global_point); x=max(0,min(self.video.width()-self.thumbnail_preview.width(),local.x()-self.thumbnail_preview.width()//2)); y=max(0,self.video.height()-CONTROL_BAR_HEIGHT-self.thumbnail_preview.height()-12); self.thumbnail_preview.move(x,y); self.thumbnail_preview.show(); self.thumbnail_preview.raise_()
 
     def _tracks_changed(self, audio: list, subtitles: list) -> None:
         self.audio_tracks = audio
@@ -496,6 +562,42 @@ class MainWindow(QMainWindow):
         dialog = PreferencesWindow(self.settings, self)
         if dialog.exec():
             self._apply_always_on_top(bool(self.settings.get("window.always_on_top", False)))
+            self.osd.set_enabled(bool(self.settings.get("ui.show_osd", True)))
+            self.playlist_panel.set_side(str(self.settings.get("ui.sidebar_side", "right")))
+            self.playlist_panel.set_current_tab(str(self.settings.get("ui.sidebar_tab", "playlist")))
+            if not self.settings.get("ui.hide_controls_while_playing", True):
+                self._hide_chrome_timer.stop(); self._show_player_chrome()
+            self._load_keybindings()
+
+    def _paste_playlist_content(self) -> None:
+        """Queue local files/folders or open a URL copied to the clipboard."""
+        mime = QApplication.clipboard().mimeData()
+        paths: list[Path] = []
+        urls: list[str] = []
+        if mime.hasUrls():
+            for url in mime.urls():
+                if url.isLocalFile(): paths.append(Path(url.toLocalFile()))
+                elif is_probable_url(url.toString()): urls.append(url.toString())
+        if mime.hasText() and not paths and not urls:
+            for line in mime.text().splitlines():
+                text = line.strip().strip('"')
+                if not text: continue
+                if is_probable_url(text): urls.append(text)
+                else:
+                    path = Path(text).expanduser()
+                    if path.exists(): paths.append(path)
+        folders = [path for path in paths if path.is_dir()]
+        files = [path for path in paths if path.is_file()]
+        if folders:
+            self.folder_worker = FolderScanWorker(folders, False, self)
+            self.folder_worker.scanned.connect(lambda found: self.open_files(found, append=True)); self.folder_worker.start()
+        if files: self.open_files(files, append=True)
+        if urls: self.open_url(urls[0])
+        if paths or urls: self.osd.show_message("Added from clipboard", "success")
+
+    def _sidebar_width_changed(self, width: int) -> None:
+        self.settings.set("ui.sidebar_width", int(width))
+        self._position_overlays()
 
     def _show_welcome(self) -> None:
         if self.playlist.current_item() is not None:
@@ -761,7 +863,8 @@ class MainWindow(QMainWindow):
             self.osd.show_message(f"Always on Top: {'On' if enabled else 'Off'}")
 
     def _refresh_playlist(self) -> None:
-        self.playlist_panel.refresh(self.playlist.items, self.playlist.current_index)
+        history={entry["source"]:(float(entry["position"]),float(entry["duration"])) for entry in self.history.entries()}
+        self.playlist_panel.refresh(self.playlist.items, self.playlist.current_index, history)
 
     def _show_controls(self) -> None:
         if self._pip_mode:
@@ -796,7 +899,11 @@ class MainWindow(QMainWindow):
         if self._mini_mode:
             return
         if self.settings.get("ui.hide_controls_while_playing", True):
-            self._hide_chrome_timer.start(delay_ms)
+            configured = max(100, int(self.settings.get("ui.osc_hide_delay_ms", delay_ms)))
+            self._hide_chrome_timer.start(configured)
+        else:
+            self._hide_chrome_timer.stop()
+            if not self._chrome_visible: self._show_player_chrome()
 
     def _show_player_chrome(self) -> None:
         self._animate_player_chrome(True)
@@ -915,8 +1022,11 @@ class MainWindow(QMainWindow):
                     if self.app_menu_bar is not None: self.app_menu_bar.raise_()
                     self.control_bar.raise_()
         rect = self.video.rect()
-        panel_width = min(PLAYLIST_PANEL_WIDTH, rect.width())
-        panel_top_left = self.video.mapToGlobal(QPoint(rect.width() - panel_width, 0))
+        side = str(self.settings.get("ui.sidebar_side", "right"))
+        panel_width = min(max(240, int(self.settings.get("ui.sidebar_width", PLAYLIST_PANEL_WIDTH))), min(600, rect.width()))
+        panel_x = 0 if side == "left" else rect.width() - panel_width
+        self.playlist_panel.set_side(side)
+        panel_top_left = self.video.mapToGlobal(QPoint(panel_x, 0))
         self.playlist_panel.setGeometry(panel_top_left.x(), panel_top_left.y(), panel_width, rect.height())
         if self.playlist_panel.isVisible():
             self.playlist_panel.raise_()
@@ -953,6 +1063,8 @@ class MainWindow(QMainWindow):
         if self.settings.get("ui.show_playlist", False):
             self.playlist_panel.show()
             self.control_bar.set_playlist_visible(True)
+        self.playlist_panel.set_side(str(self.settings.get("ui.sidebar_side", "right")))
+        self.playlist_panel.set_current_tab(str(self.settings.get("ui.sidebar_tab", "playlist")))
 
     def _show_startup_window(self) -> None:
         if self.settings.get("window.maximized", False):

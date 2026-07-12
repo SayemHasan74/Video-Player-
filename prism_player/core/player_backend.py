@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +37,7 @@ class PlayerBackend(QObject):
         self._duration = 0.0
         self._position = 0.0
         self._paused = True
+        self._pause_command_deadline = 0.0
         self._volume = 80
         self._muted = False
         self._speed = 1.0
@@ -83,6 +85,7 @@ class PlayerBackend(QObject):
             return
         self.mpv.pause = paused
         self._paused = paused
+        self._pause_command_deadline = time.monotonic() + 0.5
         self.pauseStateChanged.emit(paused)
 
     def stop(self) -> None:
@@ -277,6 +280,8 @@ class PlayerBackend(QObject):
             position = float(self.mpv.time_pos or 0.0)
             duration = float(self.mpv.duration or 0.0)
             paused = bool(self.mpv.pause)
+            if time.monotonic() < self._pause_command_deadline:
+                paused = self._paused
             buffering = bool(getattr(self.mpv, "paused_for_cache", False))
             if buffering != self._buffering:
                 self._buffering = buffering; self.bufferingChanged.emit(buffering)

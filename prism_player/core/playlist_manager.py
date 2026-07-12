@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from PyQt6.QtCore import QObject, pyqtSignal
@@ -18,6 +18,10 @@ class PlaylistItem:
     source: str
     title: str
     is_url: bool = False
+    duration: float = 0.0
+    artist: str = ""
+    album: str = ""
+    has_subtitle: bool = False
 
     @classmethod
     def from_source(cls, source: Path | str) -> "PlaylistItem":
