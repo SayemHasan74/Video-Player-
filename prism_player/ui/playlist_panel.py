@@ -48,6 +48,13 @@ class PlaylistPanel(QWidget):
         self.list = QListWidget(self)
         self.list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.list.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
+        # Episode names can be very long.  A native horizontal scrollbar was
+        # appearing as a striped/fragmented control at the panel footer; keep
+        # rows single-line and elide them within the available width instead.
+        self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.list.setTextElideMode(Qt.TextElideMode.ElideRight)
+        self.list.setWordWrap(False)
+        self.list.setUniformItemSizes(True)
         self.list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         playlist_page = QWidget(); playlist_layout = QVBoxLayout(playlist_page); playlist_layout.setContentsMargins(0, 0, 0, 0)
         tools = QHBoxLayout(); add = QPushButton("+"); self.sort = QComboBox(); self.sort.addItems(["Filename ↑", "Filename ↓", "Full path ↑", "Full path ↓"]); tools.addWidget(add); tools.addWidget(self.sort); tools.addStretch()
