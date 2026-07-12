@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from PyQt6.QtCore import QPropertyAnimation, Qt, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QResizeEvent
-from PyQt6.QtWidgets import QGraphicsOpacityEffect, QHBoxLayout, QLabel, QMenu, QPushButton, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QHBoxLayout, QLabel, QMenu, QPushButton, QVBoxLayout, QWidget
 
 from assets.icons import svg_icon
 from config.settings import CONTROL_BAR_HEIGHT, SPEED_STEPS
@@ -110,10 +110,6 @@ class ControlBar(QWidget):
         self.fullscreen_button = IconButton("fullscreen", "Fullscreen", self)
         self._build_layout()
         self._connect_signals()
-        self.opacity = QGraphicsOpacityEffect(self)
-        self.setGraphicsEffect(self.opacity)
-        self.opacity.setOpacity(1.0)
-        self.fade = QPropertyAnimation(self.opacity, b"opacity", self)
 
     def set_time(self, position: float, duration: float) -> None:
         self.position = position
@@ -178,13 +174,6 @@ class ControlBar(QWidget):
             self.volume.setVisible(True)
         for widget in (self.play_button, self.fullscreen_button):
             widget.setVisible(True)
-
-    def fade_to(self, opacity: float, duration: int) -> None:
-        self.fade.stop()
-        self.fade.setDuration(duration)
-        self.fade.setStartValue(self.opacity.opacity())
-        self.fade.setEndValue(opacity)
-        self.fade.start()
 
     def contextMenuEvent(self, event: object) -> None:
         menu = QMenu(self)

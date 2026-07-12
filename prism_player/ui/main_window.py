@@ -55,7 +55,7 @@ class MainWindow(QMainWindow):
         self.video = VideoWidget(self)
         self.title_bar = TitleBar(self)
         self.control_bar = ControlBar(self)
-        self.playlist_panel = PlaylistPanel(self.video)
+        self.playlist_panel = PlaylistPanel(self)
         self.osd = OSDLabel(self.video)
         self.drop_overlay = QLabel("Drop to play", self.video)
         self.track_menus = TrackMenuFactory(self)
@@ -100,9 +100,22 @@ class MainWindow(QMainWindow):
         if not media:
             self.osd.show_message("No supported media files found", "warning")
             return
+        selected_index = 0
+        # When a single file is opened (including through Explorer), make its
+        # containing folder the playlist.  This also gives Next/Previous the
+        # neighbouring media files users expect.
+        if not append and len(media) == 1 and media[0].is_file():
+            selected = media[0].resolve()
+            siblings = scan_media_files([selected.parent])
+            if siblings:
+                media = siblings
+                selected_index = next(
+                    (index for index, path in enumerate(media) if path.resolve() == selected),
+                    0,
+                )
         self.playlist.add_sources(media, append=append)
         if not append or self.playlist.current_index == -1:
-            self.playlist.set_current(0)
+            self.playlist.set_current(selected_index)
         elif self.player.is_loaded is False:
             self.playlist.set_current(self.playlist.current_index)
 
@@ -289,6 +302,10 @@ class MainWindow(QMainWindow):
         QShortcut(Qt.Key.Key_Escape, self, activated=self._pause_and_minimize)
 
     def eventFilter(self, watched: object, event: QEvent) -> bool:
+        if event.type() == QEvent.Type.MouseButtonPress and self.playlist_panel.isVisible():
+            widget = watched if isinstance(watched, QWidget) else None
+            if widget is not self.control_bar.playlist_button and not self._is_playlist_widget(widget):
+                self._set_playlist_visible(False)
         if self._handle_window_edge_event(watched, event):
             return True
         if watched is self.title_bar or watched is self.control_bar:
@@ -346,16 +363,23 @@ class MainWindow(QMainWindow):
             ("Open File...", self._choose_files),
             ("Open URL...", lambda: self._show_url_dialog("")),
             ("Play/Pause", self.player.play_pause),
-            ("Playlist", self._toggle_playlist),
             ("Screenshot", self._save_screenshot),
             ("Always on Top", self._toggle_always_on_top),
             ("Settings", self._show_settings),
         ]
+        playlist_action: QAction | None = None
         for label, callback in actions:
             action = QAction(label, menu)
             action.triggered.connect(callback)
             menu.addAction(action)
-        menu.exec(position)
+            if label == "Play/Pause":
+                playlist_action = QAction("Playlist", menu)
+                menu.addAction(playlist_action)
+        selected = menu.exec(position)
+        if selected is playlist_action:
+            # Opening a native tool window while QMenu is still unwinding can
+            # immediately bury it behind mpv.  Defer until the menu is gone.
+            QTimer.singleShot(0, lambda: self._set_playlist_visible(True))
 
     def _show_subtitle_menu(self) -> None:
         menu = self.track_menus.subtitle_menu(self.subtitle_tracks)
@@ -573,11 +597,26 @@ class MainWindow(QMainWindow):
     def _toggle_playlist(self) -> None:
         if self._mini_mode:
             return
-        visible = not self.playlist_panel.isVisible()
+        self._set_playlist_visible(not self.playlist_panel.isVisible())
+
+    def _set_playlist_visible(self, visible: bool) -> None:
+        """Show or hide the playlist and keep its persisted UI state in sync."""
         self.playlist_panel.setVisible(visible)
+        if visible:
+            self.playlist_panel.raise_()
+            self.title_bar.raise_()
+            self.control_bar.raise_()
         self.control_bar.set_playlist_visible(visible)
         self.settings.set("ui.show_playlist", visible)
         self._position_overlays()
+
+    def _is_playlist_widget(self, widget: QWidget | None) -> bool:
+        """Return whether a clicked widget belongs to the playlist panel."""
+        while widget is not None:
+            if widget is self.playlist_panel:
+                return True
+            widget = widget.parentWidget()
+        return False
 
     def _toggle_pip(self) -> None:
         if self.pip_window is None:
@@ -685,8 +724,6 @@ class MainWindow(QMainWindow):
         self.control_bar.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, not show)
         self.title_bar.raise_()
         self.control_bar.raise_()
-        self.title_bar.opacity.setOpacity(1.0)
-        self.control_bar.opacity.setOpacity(1.0)
         group = QParallelAnimationGroup(self)
         for widget, start, target in ((self.title_bar, start_title, target_title), (self.control_bar, start_control, target_control)):
             animation = QPropertyAnimation(widget, b"geometry", group)
@@ -731,7 +768,14 @@ class MainWindow(QMainWindow):
                     self.title_bar.raise_()
                     self.control_bar.raise_()
         rect = self.video.rect()
-        self.playlist_panel.setGeometry(max(0, rect.width() - PLAYLIST_PANEL_WIDTH), 0, PLAYLIST_PANEL_WIDTH, rect.height())
+        panel_width = min(PLAYLIST_PANEL_WIDTH, rect.width())
+        panel_top_left = self.video.mapToGlobal(QPoint(rect.width() - panel_width, 0))
+        self.playlist_panel.setGeometry(panel_top_left.x(), panel_top_left.y(), panel_width, rect.height())
+        if self.playlist_panel.isVisible():
+            self.playlist_panel.raise_()
+            if self._chrome_visible:
+                self.title_bar.raise_()
+                self.control_bar.raise_()
         self.drop_overlay.setGeometry(rect)
         if self.osd.isVisible():
             self.osd.adjustSize()

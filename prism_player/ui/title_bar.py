@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from PyQt6.QtCore import QPoint, QPropertyAnimation, Qt, pyqtSignal
+from PyQt6.QtCore import QPoint, Qt, pyqtSignal
 from PyQt6.QtGui import QMouseEvent
-from PyQt6.QtWidgets import QGraphicsOpacityEffect, QHBoxLayout, QLabel, QPushButton, QWidget
+from PyQt6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QWidget
 
 from assets.icons import svg_icon
 from config.settings import APP_SHORT_NAME, TITLE_BAR_HEIGHT
@@ -72,22 +72,11 @@ class TitleBar(QWidget):
         self.min_button.clicked.connect(self.minimizeClicked.emit)
         self.max_button.clicked.connect(self.maximizeClicked.emit)
         self.close_button.clicked.connect(self.closeClicked.emit)
-        self.opacity = QGraphicsOpacityEffect(self)
-        self.setGraphicsEffect(self.opacity)
-        self.opacity.setOpacity(1.0)
-        self.fade = QPropertyAnimation(self.opacity, b"opacity", self)
 
     def set_title(self, title: str) -> None:
         """Set currently playing title."""
         self.title_label.setText("")
         self.title_label.hide()
-
-    def fade_to(self, opacity: float, duration: int) -> None:
-        self.fade.stop()
-        self.fade.setDuration(duration)
-        self.fade.setStartValue(self.opacity.opacity())
-        self.fade.setEndValue(opacity)
-        self.fade.start()
 
     def set_maximized(self, maximized: bool) -> None:
         """Update maximize icon."""
