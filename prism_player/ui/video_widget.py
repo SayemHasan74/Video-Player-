@@ -13,6 +13,7 @@ class VideoWidget(QWidget):
     doubleClicked = pyqtSignal()
     clicked = pyqtSignal()
     rightClicked = pyqtSignal(QPoint)
+    middleClicked = pyqtSignal()
     scrolled = pyqtSignal(int)
     mouseMoved = pyqtSignal()
     mousePositionChanged = pyqtSignal(QPoint)
@@ -32,7 +33,9 @@ class VideoWidget(QWidget):
         if event.button() == Qt.MouseButton.RightButton:
             self.rightClicked.emit(event.globalPosition().toPoint())
         elif event.button() == Qt.MouseButton.MiddleButton:
-            self.scrolled.emit(0)
+            self.middleClicked.emit()
+            event.accept()
+            return
         elif event.button() == Qt.MouseButton.LeftButton:
             self.clicked.emit()
         super().mousePressEvent(event)

@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import ctypes
 import logging
+import sys
 from datetime import datetime
 from pathlib import Path
 
-from PyQt6.QtCore import QEasingCurve, QEvent, QParallelAnimationGroup, QPoint, QPropertyAnimation, QRect, QThread, QTimer, Qt, pyqtSignal
+from PyQt6.QtCore import QAbstractNativeEventFilter, QEasingCurve, QEvent, QParallelAnimationGroup, QPoint, QPropertyAnimation, QRect, QThread, QTimer, Qt, pyqtSignal
 from PyQt6.QtGui import QAction, QCloseEvent, QCursor, QDragEnterEvent, QDropEvent, QIcon, QKeyEvent, QKeySequence, QPixmap, QShortcut
 from PyQt6.QtWidgets import QAbstractButton, QAbstractSpinBox, QApplication, QComboBox, QFileDialog, QLabel, QLineEdit, QMainWindow, QMenu, QMenuBar, QPlainTextEdit, QTextEdit, QWidget
 
@@ -33,6 +35,41 @@ from utils.time_utils import format_time
 from utils.thumbnail import ThumbnailWorker, trim_thumbnail_cache
 
 APP_MENU_HEIGHT = 32
+WM_MBUTTONDOWN = 0x0207
+
+
+class _WinPoint(ctypes.Structure):
+    _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+
+class _WinMessage(ctypes.Structure):
+    _fields_ = [
+        ("hwnd", ctypes.c_void_p),
+        ("message", ctypes.c_uint),
+        ("wParam", ctypes.c_size_t),
+        ("lParam", ctypes.c_ssize_t),
+        ("time", ctypes.c_uint),
+        ("pt", _WinPoint),
+        ("lPrivate", ctypes.c_uint),
+    ]
+
+
+class NativeMiddleButtonFilter(QAbstractNativeEventFilter):
+    """Catch middle clicks even when mpv's native child HWND consumes them."""
+
+    def __init__(self, callback: object) -> None:
+        super().__init__()
+        self.callback = callback
+
+    def nativeEventFilter(self, event_type: object, message: object) -> tuple[bool, int]:
+        if sys.platform == "win32":
+            try:
+                native_message = ctypes.cast(int(message), ctypes.POINTER(_WinMessage)).contents
+                if native_message.message == WM_MBUTTONDOWN:
+                    QTimer.singleShot(0, self.callback)
+            except (TypeError, ValueError, OSError):
+                pass
+        return False, 0
 
 
 class FolderScanWorker(QThread):
@@ -92,9 +129,13 @@ class MainWindow(QMainWindow):
         self._is_playing = False
         self._chrome_animation: QParallelAnimationGroup | None = None
         self._mini_mode = False
+        self._mini_transitioning = False
+        self._mini_transition_serial = 0
+        self._native_middle_filter: NativeMiddleButtonFilter | None = None
         self._pre_mini_geometry = QRect()
         self._pre_mini_fullscreen = False
         self._pre_mini_maximized = False
+        self._pre_mini_playlist_visible = False
         self._pip_mode = False
         self._pre_pip_geometry = QRect()
         self.central_shell: QWidget | None = None
@@ -291,6 +332,7 @@ class MainWindow(QMainWindow):
         self.video.doubleClicked.connect(self._toggle_fullscreen)
         self.video.clicked.connect(self._video_clicked)
         self.video.rightClicked.connect(self._show_context_menu)
+        self.video.middleClicked.connect(self._toggle_mini_mode)
         self.video.scrolled.connect(self._handle_video_scroll)
         self.video.mouseMoved.connect(self._show_controls)
         self.video.mousePositionChanged.connect(self._handle_video_mouse_position)
@@ -343,12 +385,14 @@ class MainWindow(QMainWindow):
         app = QApplication.instance()
         if app is not None:
             app.installEventFilter(self)
+            if sys.platform == "win32":
+                self._native_middle_filter = NativeMiddleButtonFilter(self._handle_native_middle_click)
+                app.installNativeEventFilter(self._native_middle_filter)
         self.video.installEventFilter(self)
         self.title_bar.installEventFilter(self)
         self.control_bar.installEventFilter(self)
         QShortcut(Qt.Key.Key_Return, self, activated=lambda: None if self.isFullScreen() else self._toggle_fullscreen())
         QShortcut(Qt.Key.Key_Enter, self, activated=lambda: None if self.isFullScreen() else self._toggle_fullscreen())
-        QShortcut(Qt.Key.Key_Escape, self, activated=lambda: self._toggle_fullscreen() if self.isFullScreen() else None)
         paste_shortcut = QShortcut(QKeySequence.StandardKey.Paste, self, activated=self._paste_playlist_content)
         paste_shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
 
@@ -374,7 +418,7 @@ class MainWindow(QMainWindow):
         bar.raise_()
 
     def _action_callbacks(self) -> dict[str, object]:
-        return {"play_pause":self.player.play_pause,"seek_backward":lambda:self.player.seek_relative(-5),"seek_forward":lambda:self.player.seek_relative(5),"volume_up":lambda:self.player.change_volume(5),"volume_down":lambda:self.player.change_volume(-5),"mute":self.player.toggle_mute,"fullscreen":self._toggle_fullscreen,"exit_fullscreen":lambda:self._toggle_fullscreen() if self.isFullScreen() else None,"playlist":self._toggle_playlist,"always_on_top":self._toggle_always_on_top,"screenshot":self._save_screenshot,"open_file":self._choose_files,"open_url":lambda:self._show_url_dialog(""),"next":self._play_next,"previous":self._play_previous,"music_mode":self._toggle_mini_mode}
+        return {"play_pause":self.player.play_pause,"seek_backward":lambda:self.player.seek_relative(-5),"seek_forward":lambda:self.player.seek_relative(5),"volume_up":lambda:self.player.change_volume(5),"volume_down":lambda:self.player.change_volume(-5),"mute":self.player.toggle_mute,"fullscreen":self._toggle_fullscreen,"exit_fullscreen":self._pause_and_minimize,"playlist":self._toggle_playlist,"always_on_top":self._toggle_always_on_top,"screenshot":self._save_screenshot,"open_file":self._choose_files,"open_url":lambda:self._show_url_dialog(""),"next":self._play_next,"previous":self._play_previous,"music_mode":self._toggle_mini_mode}
 
     def _load_keybindings(self) -> None:
         for shortcut in self._binding_shortcuts:shortcut.setEnabled(False);shortcut.deleteLater()
@@ -389,6 +433,21 @@ class MainWindow(QMainWindow):
         for action_id,action in self._menu_actions.items():action.setShortcut(QKeySequence(reverse.get(action_id,"")))
 
     def eventFilter(self, watched: object, event: QEvent) -> bool:
+        if event.type() == QEvent.Type.KeyPress and event.key() == Qt.Key.Key_Escape and not event.isAutoRepeat():
+            focus = QApplication.focusWidget()
+            in_player = focus is None or focus is self or (focus is not None and (self.isAncestorOf(focus) or self._is_playlist_widget(focus)))
+            if QApplication.activeModalWidget() is None and in_player:
+                self._pause_and_minimize()
+                event.accept()
+                return True
+        if event.type() == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.MiddleButton:
+            # Use one path for both the native mpv surface and Qt controls.
+            # Windows may report either a QWidget or a QWindow as the receiver.
+            if self.isVisible() and self.frameGeometry().contains(QCursor.pos()):
+                if not self._mini_transitioning:
+                    self._toggle_mini_mode()
+                event.accept()
+                return True
         if event.type() == QEvent.Type.KeyPress and event.key() == Qt.Key.Key_Space and not event.isAutoRepeat():
             focus = QApplication.focusWidget()
             editing = isinstance(focus, (QLineEdit, QTextEdit, QPlainTextEdit, QAbstractSpinBox, QComboBox, QAbstractButton))
@@ -694,8 +753,7 @@ class MainWindow(QMainWindow):
         elif key == Qt.Key.Key_C:
             self._toggle_cover_mode()
         elif key == Qt.Key.Key_Escape:
-            if self.isFullScreen():
-                self._toggle_fullscreen()
+            self._pause_and_minimize()
         elif key == Qt.Key.Key_P:
             self._toggle_playlist()
         elif key == Qt.Key.Key_T:
@@ -731,40 +789,66 @@ class MainWindow(QMainWindow):
         self.showMinimized()
 
     def _toggle_mini_mode(self) -> None:
+        if self._mini_transitioning:
+            return
         if self._mini_mode:
             self._exit_mini_mode()
         else:
             self._enter_mini_mode()
 
-    def _enter_mini_mode(self) -> None:
-        if self._mini_mode:
+    def _handle_native_middle_click(self) -> None:
+        """Toggle from a native middle click located inside the player window."""
+        if self._mini_transitioning or not self.isVisible() or self.isMinimized():
             return
-        self._mini_mode = True
+        if self.frameGeometry().contains(QCursor.pos()):
+            self._toggle_mini_mode()
+
+    def _enter_mini_mode(self) -> None:
+        if self._mini_mode or self._mini_transitioning:
+            return
+        self._mini_transitioning = True
+        self._mini_transition_serial += 1
+        serial = self._mini_transition_serial
+        self._stop_chrome_animation()
         self._hide_chrome_timer.stop()
-        self._pre_mini_geometry = self.geometry()
+        previous_geometry = QRect(self.geometry())
+        self._pre_mini_geometry = previous_geometry
         self._pre_mini_fullscreen = self.isFullScreen()
         self._pre_mini_maximized = self.isMaximized()
+        self._pre_mini_playlist_visible = self.playlist_panel.isVisible()
+        self._mini_mode = True
         self.playlist_panel.hide()
         self.control_bar.set_playlist_visible(False)
-        self.setMinimumSize(420, TITLE_BAR_HEIGHT + CONTROL_BAR_HEIGHT)
+        compact_height = TITLE_BAR_HEIGHT + APP_MENU_HEIGHT + CONTROL_BAR_HEIGHT
+        if self._pre_mini_fullscreen or self._pre_mini_maximized:
+            self.showNormal()
         self.setMaximumHeight(16777215)
-        self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
-        self.showNormal()
-        geometry = self._pre_mini_geometry if self._pre_mini_geometry.isValid() else self.geometry()
-        self.setGeometry(geometry.left(), geometry.top(), 640, TITLE_BAR_HEIGHT + CONTROL_BAR_HEIGHT)
+        self.setMinimumSize(420, compact_height)
+        self.setMaximumHeight(compact_height)
+        target = QRect(previous_geometry.left(), previous_geometry.top(), max(420, previous_geometry.width()), compact_height)
+        self.setGeometry(target)
         self.control_bar.set_fullscreen(False)
         self._chrome_visible = True
+        self.title_bar.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
+        self.control_bar.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
         self._position_overlays()
         self.raise_()
         self.activateWindow()
+        QTimer.singleShot(0, lambda: self._stabilize_compact_geometry(serial, target))
+        QTimer.singleShot(80, lambda: self._stabilize_compact_geometry(serial, target))
+        QTimer.singleShot(120, lambda: self._finish_mini_transition(serial))
 
     def _exit_mini_mode(self) -> None:
-        if not self._mini_mode:
+        if not self._mini_mode or self._mini_transitioning:
             return
+        self._mini_transitioning = True
+        self._mini_transition_serial += 1
+        serial = self._mini_transition_serial
+        self._stop_chrome_animation()
+        self._hide_chrome_timer.stop()
         self._mini_mode = False
         self.setMaximumHeight(16777215)
         self.setMinimumSize(*MIN_WINDOW_SIZE)
-        self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, bool(self.settings.get("window.always_on_top", False)))
         if self._pre_mini_fullscreen:
             self.showFullScreen()
             self.control_bar.set_fullscreen(True)
@@ -776,13 +860,57 @@ class MainWindow(QMainWindow):
             if self._pre_mini_geometry.isValid():
                 self.setGeometry(self._pre_mini_geometry)
             self.control_bar.set_fullscreen(False)
-        if self.settings.get("ui.show_playlist", False):
+        if self._pre_mini_playlist_visible:
             self.playlist_panel.show()
             self.control_bar.set_playlist_visible(True)
-        self._show_player_chrome()
-        if self._is_playing:
-            self._schedule_hide_player_chrome(3000)
+        self._chrome_visible = True
+        if self.app_menu_bar is not None:
+            self.app_menu_bar.show()
+        self.title_bar.show()
+        self.control_bar.show()
+        self.title_bar.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
+        self.control_bar.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
         self._position_overlays()
+        QTimer.singleShot(0, lambda: self._stabilize_restored_geometry(serial))
+        QTimer.singleShot(80, lambda: self._stabilize_restored_geometry(serial))
+        QTimer.singleShot(120, lambda: self._finish_mini_transition(serial))
+
+    def _stop_chrome_animation(self) -> None:
+        """Stop an overlay animation before changing the window layout."""
+        if self._chrome_animation is not None:
+            self._chrome_animation.stop()
+            self._chrome_animation.deleteLater()
+            self._chrome_animation = None
+
+    def _stabilize_compact_geometry(self, serial: int, target: QRect) -> None:
+        """Reapply compact geometry after Windows finishes a state change."""
+        if serial != self._mini_transition_serial or not self._mini_mode:
+            return
+        self.setGeometry(target)
+        self._position_overlays()
+
+    def _stabilize_restored_geometry(self, serial: int) -> None:
+        """Restore the precise pre-compact geometry/state after native events settle."""
+        if serial != self._mini_transition_serial or self._mini_mode:
+            return
+        if self._pre_mini_fullscreen:
+            if not self.isFullScreen():
+                self.showFullScreen()
+        elif self._pre_mini_maximized:
+            if not self.isMaximized():
+                self.showMaximized()
+        elif self._pre_mini_geometry.isValid():
+            self.showNormal()
+            self.setGeometry(self._pre_mini_geometry)
+        self._position_overlays()
+
+    def _finish_mini_transition(self, serial: int) -> None:
+        if serial != self._mini_transition_serial:
+            return
+        self._mini_transitioning = False
+        self._position_overlays()
+        if not self._mini_mode and self._is_playing:
+            self._schedule_hide_player_chrome(3000)
 
     def _toggle_cover_mode(self) -> None:
         self._cover_mode = not self._cover_mode
@@ -1004,7 +1132,7 @@ class MainWindow(QMainWindow):
                 if self._mini_mode:
                     title_y = 0
                     menu_y = TITLE_BAR_HEIGHT
-                    control_y = TITLE_BAR_HEIGHT
+                    control_y = TITLE_BAR_HEIGHT + APP_MENU_HEIGHT
                     self._chrome_visible = True
                 else:
                     title_y = 0 if self._chrome_visible else -TITLE_BAR_HEIGHT
@@ -1053,6 +1181,13 @@ class MainWindow(QMainWindow):
     def _restore_geometry(self) -> None:
         width = int(self.settings.get("window.width", DEFAULT_WINDOW_SIZE[0]))
         height = int(self.settings.get("window.height", DEFAULT_WINDOW_SIZE[1]))
+        compact_height = TITLE_BAR_HEIGHT + APP_MENU_HEIGHT + CONTROL_BAR_HEIGHT
+        # Older compact-mode builds could persist the collapsed strip as the
+        # normal window geometry when they were closed during a native HWND
+        # recreation. Recover those installations on the next launch.
+        if height <= compact_height:
+            height = DEFAULT_WINDOW_SIZE[1]
+            self.settings.set("window.height", height)
         self.resize(max(width, MIN_WINDOW_SIZE[0]), max(height, MIN_WINDOW_SIZE[1]))
         x_value = self.settings.get("window.x")
         y_value = self.settings.get("window.y")
@@ -1200,5 +1335,5 @@ class MainWindow(QMainWindow):
 
     def _resize_minimum_size(self) -> tuple[int, int]:
         if self._mini_mode:
-            return 420, TITLE_BAR_HEIGHT + CONTROL_BAR_HEIGHT
+            return 420, TITLE_BAR_HEIGHT + APP_MENU_HEIGHT + CONTROL_BAR_HEIGHT
         return MIN_WINDOW_SIZE
