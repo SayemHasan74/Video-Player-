@@ -6,6 +6,8 @@ import json
 import os
 import shutil
 import subprocess
+import re
+from difflib import SequenceMatcher
 from functools import lru_cache
 from pathlib import Path
 
@@ -38,9 +40,16 @@ def matching_subtitles(source: str) -> list[Path]:
     path = Path(source)
     if not path.exists():
         return []
-    stem = path.stem.casefold()
-    return sorted(
-        child for child in path.parent.iterdir()
-        if child.is_file() and child.suffix.lower() in SUBTITLE_EXTENSIONS
-        and (child.stem.casefold().startswith(stem) or stem.startswith(child.stem.casefold()))
-    )
+    def normalized(value: str) -> str:
+        return " ".join(re.findall(r"[a-z0-9]+", value.casefold()))
+    stem = normalized(path.stem)
+    matches: list[tuple[float, Path]] = []
+    for child in path.parent.iterdir():
+        if not child.is_file() or child.suffix.lower() not in SUBTITLE_EXTENSIONS:
+            continue
+        candidate = normalized(child.stem)
+        ratio = SequenceMatcher(None, stem, candidate).ratio()
+        if stem in candidate or candidate in stem or ratio >= 0.68:
+            exact_bonus = 1.0 if candidate == stem else 0.5 if candidate.startswith(stem) else 0.0
+            matches.append((ratio + exact_bonus, child))
+    return [child for _score, child in sorted(matches, key=lambda item: (-item[0], item[1].name.casefold()))]

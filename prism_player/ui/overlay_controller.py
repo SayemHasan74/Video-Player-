@@ -78,6 +78,16 @@ class OverlayController(QObject):
             window.control_bar.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
             self.position()
             return
+        if not window.settings.get("ui.animations", True):
+            window._chrome_visible = show
+            if window.app_menu_bar is not None:
+                window.app_menu_bar.setVisible(show)
+            window.title_bar.setVisible(show)
+            window.control_bar.setVisible(show)
+            window.title_bar.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, not show)
+            window.control_bar.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, not show)
+            self.position()
+            return
         if window._chrome_visible == show and self.animation is None:
             return
         if self.animation is not None:

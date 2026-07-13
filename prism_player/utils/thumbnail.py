@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import shutil
 import subprocess
@@ -21,7 +22,19 @@ def thumbnail_cache_dir(source: Path | str) -> Path:
         key = str(path)
     target = app_data_dir() / "thumbnails" / hashlib.sha256(key.encode()).hexdigest()
     target.mkdir(parents=True, exist_ok=True)
+    try: os.utime(target, None)
+    except OSError: pass
     return target
+
+
+def adaptive_sample_count(duration: float, requested: int) -> int:
+    """Keep useful coverage while bounding work for multi-hour media."""
+    requested = max(10, min(200, int(requested)))
+    if duration > 6 * 3600:
+        return max(25, requested // 2)
+    if duration > 2 * 3600:
+        return max(40, round(requested * 0.75))
+    return requested
 
 def ffmpeg_executable() -> str | None:
     found=shutil.which("ffmpeg")
@@ -48,7 +61,7 @@ class ThumbnailWorker(QThread):
     progressChanged = pyqtSignal(int)
 
     def __init__(self, source: str, duration: float, samples: int = 100, parent: object | None = None) -> None:
-        super().__init__(parent); self.source = source; self.duration = duration; self.samples = max(1, samples); self._cancelled = False
+        super().__init__(parent); self.source = source; self.duration = duration; self.samples = adaptive_sample_count(duration, samples); self._cancelled = False
 
     def cancel(self) -> None: self._cancelled = True
 
@@ -57,6 +70,11 @@ class ThumbnailWorker(QThread):
         if not ffmpeg or self.duration <= 0:
             return
         cache = thumbnail_cache_dir(self.source)
+        manifest = cache / "manifest.json"
+        try:
+            manifest.write_text(json.dumps({"source": self.source, "duration": self.duration, "samples": self.samples}), encoding="utf-8")
+        except OSError:
+            pass
         for index in range(self.samples):
             if self._cancelled: return
             timestamp = self.duration * index / max(1, self.samples - 1); output = cache / f"{index:03d}.jpg"
@@ -64,9 +82,16 @@ class ThumbnailWorker(QThread):
                 try: output.unlink()
                 except OSError: pass
             if not output.exists():
-                command = [ffmpeg, "-loglevel", "error", "-ss", str(timestamp), "-i", self.source, "-frames:v", "1", "-vf", "scale=240:-2", "-q:v", "5", "-y", str(output)]
-                try: subprocess.run(command, timeout=20, creationflags=0x08000000)
-                except (OSError, subprocess.SubprocessError): continue
+                partial = output.with_suffix(".part.jpg")
+                command = [ffmpeg, "-loglevel", "error", "-ss", str(timestamp), "-i", self.source, "-frames:v", "1", "-vf", "scale=240:-2", "-q:v", "5", "-y", str(partial)]
+                try:
+                    result = subprocess.run(command, timeout=20, creationflags=0x08000000)
+                    if result.returncode == 0 and valid_jpeg(partial): partial.replace(output)
+                    elif partial.exists(): partial.unlink()
+                except (OSError, subprocess.SubprocessError):
+                    try: partial.unlink(missing_ok=True)
+                    except OSError: pass
+                    continue
             if output.exists() and valid_jpeg(output): self.thumbnailReady.emit(timestamp, str(output))
             self.progressChanged.emit(int((index + 1) * 100 / self.samples))
 
@@ -80,3 +105,15 @@ def trim_thumbnail_cache(limit_mb: int) -> None:
         if total <= limit: break
         try: size = path.stat().st_size; path.unlink(); total -= size
         except OSError: pass
+    for directory in sorted((path for path in root.iterdir() if path.is_dir()), key=lambda path: path.stat().st_atime):
+        try:
+            for partial in directory.glob("*.part.jpg"): partial.unlink(missing_ok=True)
+            if not any(directory.glob("*.jpg")): shutil.rmtree(directory)
+        except OSError:
+            pass
+
+
+def clear_thumbnail_cache() -> None:
+    root = app_data_dir() / "thumbnails"
+    if root.exists():
+        shutil.rmtree(root, ignore_errors=True)

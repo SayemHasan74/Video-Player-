@@ -25,6 +25,16 @@ BUILTIN_PROFILES: dict[str, dict[str, str]] = {
     },
 }
 
+ACTION_LABELS: dict[str, str] = {
+    "play_pause": "Play / Pause", "seek_backward": "Seek Backward", "seek_forward": "Seek Forward",
+    "volume_up": "Volume Up", "volume_down": "Volume Down", "mute": "Mute",
+    "fullscreen": "Toggle Fullscreen", "exit_fullscreen": "Pause and Minimize", "playlist": "Playlist",
+    "always_on_top": "Always on Top", "screenshot": "Screenshot", "open_file": "Open File",
+    "open_url": "Open URL", "next": "Next File", "previous": "Previous File", "music_mode": "Compact Mode",
+    "pip": "Picture in Picture", "filters": "Filters", "inspector": "Inspector", "history": "History",
+    "preferences": "Preferences", "find_subtitles": "Find Subtitles",
+}
+
 
 class KeyBindingStore:
     def __init__(self, directory: Path | None = None) -> None:
@@ -38,7 +48,8 @@ class KeyBindingStore:
     def load(self, name: str) -> dict[str, str]:
         if name in BUILTIN_PROFILES:
             return deepcopy(BUILTIN_PROFILES[name])
-        path = self.directory / f"{name}.json"
+        try: path = self._profile_path(name)
+        except ValueError: return deepcopy(BUILTIN_PROFILES["Default"])
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
             return {str(key): str(action) for key, action in data.items()}
@@ -48,10 +59,20 @@ class KeyBindingStore:
     def save(self, name: str, bindings: dict[str, str]) -> None:
         if name in BUILTIN_PROFILES:
             raise ValueError("Built-in profiles are read-only")
-        (self.directory / f"{name}.json").write_text(json.dumps(bindings, indent=2), encoding="utf-8")
+        self._profile_path(name).write_text(json.dumps(bindings, indent=2), encoding="utf-8")
 
     def duplicate(self, source: str, target: str) -> dict[str, str]:
         bindings = self.load(source)
         self.save(target, bindings)
         return bindings
 
+    def delete(self, name: str) -> None:
+        if name in BUILTIN_PROFILES:
+            raise ValueError("Built-in profiles are read-only")
+        self._profile_path(name).unlink(missing_ok=True)
+
+    def _profile_path(self, name: str) -> Path:
+        name = name.strip()
+        if not name or Path(name).name != name or any(character in name for character in '<>:"/\\|?*'):
+            raise ValueError("Invalid profile name")
+        return self.directory / f"{name}.json"

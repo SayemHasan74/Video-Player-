@@ -28,6 +28,8 @@ class PlayerBackend(QObject):
     loaded = pyqtSignal(str)
     error = pyqtSignal(str)
     rendererReady = pyqtSignal()
+    stateChanged = pyqtSignal(dict)
+    filtersChanged = pyqtSignal(list, list)
 
     def __init__(self, video_widget: QObject | None = None, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -44,6 +46,9 @@ class PlayerBackend(QObject):
         self._speed = 1.0
         self._ended_emitted = False
         self._buffering = False
+        self._last_track_signature: tuple = ()
+        self._last_state: dict[str, Any] = {}
+        self._last_filter_signature: tuple = ()
         self._video_widget = video_widget
         self._load_mpv()
         if video_widget is not None and hasattr(video_widget, "set_backend"):
@@ -172,7 +177,13 @@ class PlayerBackend(QObject):
     def set_property(self, name: str, value: Any) -> None:
         """Set an arbitrary live mpv property from reactive settings panels."""
         if self.mpv is not None:
-            self.mpv._set_property(name, value)
+            try:
+                self.mpv._set_property(name, value)
+                self._last_state[name] = value
+                self.stateChanged.emit(dict(self._last_state))
+            except Exception as exc:
+                self.logger.warning("Could not set mpv property %s: %s", name, exc)
+                self.error.emit(f"Setting unavailable: {name}")
 
     def get_property(self, name: str, fallback: Any = None) -> Any:
         if self.mpv is None:
@@ -185,16 +196,54 @@ class PlayerBackend(QObject):
 
     def add_filter(self, kind: str, value: str) -> None:
         if self.mpv is not None:
-            self.mpv.command("vf" if kind == "video" else "af", "add", value)
+            try:
+                self.mpv.command("vf" if kind == "video" else "af", "add", value)
+                self._emit_filters()
+            except Exception as exc:
+                self.error.emit(f"Filter failed: {exc}")
 
     def remove_filter(self, kind: str, value: str) -> None:
         if self.mpv is not None:
-            self.mpv.command("vf" if kind == "video" else "af", "remove", value)
+            try:
+                self.mpv.command("vf" if kind == "video" else "af", "remove", value)
+                self._emit_filters()
+            except Exception as exc:
+                self.error.emit(f"Could not remove filter: {exc}")
 
-    def load_subtitle(self, path: Path) -> None:
+    def replace_filter(self, kind: str, label: str, value: str | None) -> None:
+        """Replace one application-owned labelled filter without touching user filters."""
+        if self.mpv is None:
+            return
+        command = "vf" if kind == "video" else "af"
+        try:
+            self.mpv.command(command, "remove", f"@{label}")
+        except Exception:
+            pass
+        if value:
+            try:
+                self.mpv.command(command, "add", f"@{label}:{value}")
+            except Exception as exc:
+                self.error.emit(f"Filter failed: {exc}")
+        self._emit_filters()
+
+    def load_subtitle(self, path: Path, select: bool = True, secondary: bool = False) -> Any:
         """Load external subtitle."""
         if self.mpv is not None and self.is_loaded:
-            self.mpv.command("sub-add", str(path), "select")
+            try:
+                track_id = self.mpv.command("sub-add", str(path), "auto" if secondary or not select else "select")
+                if track_id in (None, False, "no"):
+                    resolved = str(path.resolve())
+                    matches = [
+                        track.get("id") for track in (getattr(self.mpv, "track_list", None) or [])
+                        if track.get("type") == "sub" and str(track.get("external-filename") or "") == resolved
+                    ]
+                    track_id = max((track for track in matches if isinstance(track, int)), default=None)
+                if secondary and track_id not in (None, "no"):
+                    self.mpv.secondary_sid = track_id
+                return track_id
+            except Exception as exc:
+                self.error.emit(f"Subtitle failed: {exc}")
+        return None
 
     def screenshot(self, output: Path) -> bool:
         """Save a video screenshot."""
@@ -262,6 +311,7 @@ class PlayerBackend(QObject):
             "input_vo_keyboard": False,
             "osc": False,
             "keep_open": True,
+            "sub_auto": "no",
             "ytdl": False,
             "hwdec": "auto-safe",
             "vo": "libmpv",
@@ -312,6 +362,8 @@ class PlayerBackend(QObject):
                 self._paused = paused
                 self.pauseStateChanged.emit(paused)
             self._emit_tracks()
+            self._emit_reactive_state()
+            self._emit_filters()
             if self.is_loaded and duration > 0 and position >= duration - 0.4 and not paused and not self._ended_emitted:
                 self._ended_emitted = True
                 self.fileEnded.emit()
@@ -327,7 +379,36 @@ class PlayerBackend(QObject):
             target = audio_tracks if track.get("type") == "audio" else subtitle_tracks if track.get("type") == "sub" else None
             if target is not None:
                 target.append(track)
-        self.tracksChanged.emit(audio_tracks, subtitle_tracks)
+        signature = tuple(
+            (track.get("type"), track.get("id"), track.get("lang"), track.get("title"), track.get("selected"))
+            for track in track_list
+        )
+        if signature != self._last_track_signature:
+            self._last_track_signature = signature
+            self.tracksChanged.emit(audio_tracks, subtitle_tracks)
+
+    def _emit_reactive_state(self) -> None:
+        properties = (
+            "aid", "sid", "secondary-sid", "speed", "volume", "hwdec",
+            "video-aspect-override", "video-rotate", "brightness", "contrast",
+            "saturation", "gamma", "hue", "audio-delay", "sub-delay",
+            "secondary-sub-delay", "sub-visibility", "secondary-sub-visibility",
+            "sub-font", "sub-font-size", "sub-color", "sub-border-size",
+            "sub-shadow-offset", "sub-pos", "sub-codepage",
+        )
+        state = {name: self.get_property(name) for name in properties}
+        state = {name: value for name, value in state.items() if value is not None}
+        if state != self._last_state:
+            self._last_state = state
+            self.stateChanged.emit(dict(state))
+
+    def _emit_filters(self) -> None:
+        video = self.get_property("vf", []) or []
+        audio = self.get_property("af", []) or []
+        signature = (repr(video), repr(audio))
+        if signature != self._last_filter_signature:
+            self._last_filter_signature = signature
+            self.filtersChanged.emit(list(video), list(audio))
 
     def _emit_chapters(self) -> None:
         if self.mpv is None: return

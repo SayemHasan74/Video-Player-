@@ -115,7 +115,7 @@ def default_settings() -> dict[str, Any]:
                 "user_agent": "",
             },
             "thumbnails": {"enabled": True, "samples": 100, "cache_mb": 512},
-            "startup": {"show_welcome": True, "reopen_last": False},
+            "startup": {"show_welcome": True, "reopen_last": False, "last_source": ""},
             "advanced": {"mpv_options": ""},
             "keys": {"profile": "Default"},
         }

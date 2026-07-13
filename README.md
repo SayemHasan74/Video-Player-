@@ -54,6 +54,14 @@ python main.py
 - Playlist panel with add, remove, select, next, previous, shuffle-ready logic
 - Resume position history stored in SQLite
 - Audio and subtitle track menus
+- Reactive Video/Audio/Subtitle quick settings with crop selection, video controls, 10-band EQ, and dual subtitles
+- Persistent active/saved filter editor with typed presets and optional shortcuts
+- Structured live media inspector with arbitrary mpv property watch
+- Searchable playback history with queued background writes
+- Recent-media welcome window with file/URL drag-and-drop
+- Incremental, validated thumbnail previews with bounded disk caching
+- Searchable nine-section preferences and editable named key-binding profiles
+- Shared application and right-click action menus
 - Online subtitle finder that opens targeted subtitle searches and loads downloaded subtitle files
 - External subtitle loading
 - Fit or cover-screen video mode for fullscreen playback
