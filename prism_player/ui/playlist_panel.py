@@ -34,11 +34,21 @@ class PlaylistListWidget(QListWidget):
 
 
 class PlaylistRow(QWidget):
+    clicked = pyqtSignal()
+
     def __init__(self, item: PlaylistItem, progress: float = 0) -> None:
         super().__init__(); self.setMinimumHeight(52); self.setMouseTracking(True); self.setCursor(Qt.CursorShape.ArrowCursor); self.source=item.source; self.title=ElidedLabel(item.title); self.title.setMinimumWidth(0); self.title.setSizePolicy(QSizePolicy.Policy.Ignored,QSizePolicy.Policy.Preferred); self.title.setStyleSheet("color:#f2f2f2;"); self.info=ElidedLabel(); self.info.setMinimumWidth(0); self.info.setSizePolicy(QSizePolicy.Policy.Ignored,QSizePolicy.Policy.Preferred); self.info.setStyleSheet("color:#999; font-size:11px;"); self.duration=QLabel(format_time(item.duration) if item.duration else "--:--"); self.duration.setStyleSheet("font-family:Consolas; color:#bbb;"); self.subtitle=QLabel("CC" if item.has_subtitle else ""); self.subtitle.setStyleSheet("color:#8ab4ff;font-size:10px;font-weight:700;")
         top=QHBoxLayout(); top.setContentsMargins(0,0,0,0); top.addWidget(self.title,1); top.addWidget(self.subtitle); top.addWidget(self.duration)
         self.progress=QProgressBar(); self.progress.setRange(0,1000); self.progress.setValue(round(progress*1000)); self.progress.setTextVisible(False); self.progress.setFixedHeight(3); self.progress.setStyleSheet("QProgressBar{border:0;background:transparent}QProgressBar::chunk{border-radius:1px;background:qlineargradient(x1:0,y1:0,x2:1,y2:0,stop:0 rgba(255,255,255,0),stop:.35 rgba(255,255,255,110),stop:.8 rgba(220,235,255,210),stop:1 rgba(255,255,255,0))}"); self.progress.setVisible(progress>0)
         layout=QVBoxLayout(self); layout.setContentsMargins(8,5,8,5); layout.setSpacing(2); layout.addLayout(top); layout.addWidget(self.info); layout.addWidget(self.progress); self.update_item(item)
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton and self.rect().contains(event.position().toPoint()):
+            self.clicked.emit()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
     def update_item(self,item:PlaylistItem)->None:
         self.title.set_full_text(item.title); self.info.set_full_text(" • ".join(value for value in (item.artist,item.album) if value)); self.info.setVisible(bool(self.info.full_text)); self.duration.setText(format_time(item.duration) if item.duration else "--:--"); self.subtitle.setText("CC" if item.has_subtitle else "")
 
@@ -69,10 +79,9 @@ class PlaylistPanel(QWidget):
     keyPressed = pyqtSignal(object)
 
     def __init__(self, parent: QWidget | None = None) -> None:
-        # A tool window is required here: mpv renders into its own native HWND,
-        # which can cover ordinary Qt child widgets regardless of raise_().
-        super().__init__(parent, Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint | Qt.WindowType.NoDropShadowWindowHint)
-        self.setWindowTitle("Playlist")
+        # The render-context video surface participates in Qt composition, so
+        # the playlist is a normal child overlay rather than another OS window.
+        super().__init__(parent)
         self._side = "right"
         self._resizing = False
         self._resize_start = QPoint()
@@ -85,9 +94,7 @@ class PlaylistPanel(QWidget):
         self.setMinimumWidth(240)
         self.setMaximumWidth(600)
         self.setMouseTracking(True)
-        # Top-level styled widgets do not reliably fill their native backing
-        # surface on Windows.  An explicit opaque palette prevents mpv and the
-        # control bar from bleeding through unpainted parts of the panel.
+        # Keep the panel opaque above the video while remaining in one Qt tree.
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
         self.setAutoFillBackground(True)
@@ -158,6 +165,17 @@ class PlaylistPanel(QWidget):
             return
         self.itemActivated.emit(self.list.row(item))
 
+    def _row_clicked(self, source: str) -> None:
+        """Activate an item-widget row, which otherwise sits above the list viewport."""
+        if QApplication.keyboardModifiers() & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier):
+            return
+        for index in range(self.list.count()):
+            item = self.list.item(index)
+            if item.data(Qt.ItemDataRole.UserRole) == source:
+                self.list.setCurrentRow(index)
+                self.itemActivated.emit(index)
+                return
+
     def set_side(self, side: str) -> None:
         self._side = "left" if side == "left" else "right"
 
@@ -200,7 +218,7 @@ class PlaylistPanel(QWidget):
         self._items_by_source = {item.source: item for item in items}
         for item in items:
             position,total=self._history.get(item.source,(0,0)); progress=position/total if total else 0
-            widget=PlaylistRow(item,progress); row = QListWidgetItem(); row.setData(Qt.ItemDataRole.UserRole, item.source); row.setSizeHint(QSize(0,54)); self.list.addItem(row); self.list.setItemWidget(row,widget)
+            widget=PlaylistRow(item,progress); widget.clicked.connect(lambda source=item.source: self._row_clicked(source)); row = QListWidgetItem(); row.setData(Qt.ItemDataRole.UserRole, item.source); row.setSizeHint(QSize(0,54)); self.list.addItem(row); self.list.setItemWidget(row,widget)
         if 0 <= current_index < self.list.count():
             self.list.setCurrentRow(current_index)
         total=sum(item.duration for item in items); self.footer.setText(f"{len(items)} items • {format_time(total)}")

@@ -2,76 +2,39 @@
 
 from __future__ import annotations
 
-import ctypes
 import logging
-import sys
 from datetime import datetime
 from pathlib import Path
 
-from PyQt6.QtCore import QAbstractNativeEventFilter, QEasingCurve, QEvent, QParallelAnimationGroup, QPoint, QPropertyAnimation, QRect, QThread, QTimer, Qt, pyqtSignal
+from PyQt6.QtCore import QEvent, QPoint, QRect, QThread, QTimer, Qt, pyqtSignal
 from PyQt6.QtGui import QAction, QCloseEvent, QCursor, QDragEnterEvent, QDropEvent, QIcon, QKeyEvent, QKeySequence, QPixmap, QShortcut
-from PyQt6.QtWidgets import QAbstractButton, QAbstractSpinBox, QApplication, QComboBox, QFileDialog, QLabel, QLineEdit, QMainWindow, QMenu, QMenuBar, QPlainTextEdit, QTextEdit, QWidget
+from PyQt6.QtWidgets import QApplication, QFileDialog, QLabel, QMainWindow, QMenu, QMenuBar, QWidget
 
-from config.settings import APP_NAME, CONTROL_BAR_HEIGHT, DEFAULT_WINDOW_SIZE, MIN_WINDOW_SIZE, PLAYLIST_PANEL_WIDTH, SettingsStore, TITLE_BAR_HEIGHT
+from config.settings import APP_NAME, CONTROL_BAR_HEIGHT, DEFAULT_WINDOW_SIZE, MIN_WINDOW_SIZE, SettingsStore, TITLE_BAR_HEIGHT
 from core.history_manager import HistoryManager
 from core.keybindings import KeyBindingStore
 from core.player_backend import PlayerBackend
 from core.playlist_manager import PlaylistItem, PlaylistManager
 from core.url_resolver import UrlResolverWorker
 from ui.control_bar import ControlBar
+from ui.input_controller import PlayerInputController
 from ui.auxiliary_windows import FiltersWindow, HistoryWindow, InspectorWindow, PreferencesWindow, WelcomeWindow
 from ui.open_url_dialog import OpenUrlDialog
 from ui.osd import OSDLabel
-from ui.pip_window import PiPWindow
+from ui.overlay_controller import OverlayController
 from ui.playlist_panel import PlaylistPanel
 from ui.settings_dialog import SettingsDialog
 from ui.subtitle_finder_dialog import SubtitleFinderDialog
 from ui.title_bar import TitleBar
 from ui.track_menu import TrackMenuFactory
 from ui.video_widget import VideoWidget
+from ui.window_mode import WindowMode, WindowModeController
 from utils.file_utils import is_media_file, is_probable_url, scan_media_files
 from core.media_probe import matching_subtitles
 from utils.time_utils import format_time
 from utils.thumbnail import ThumbnailWorker, trim_thumbnail_cache
 
 APP_MENU_HEIGHT = 32
-WM_MBUTTONDOWN = 0x0207
-
-
-class _WinPoint(ctypes.Structure):
-    _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
-
-
-class _WinMessage(ctypes.Structure):
-    _fields_ = [
-        ("hwnd", ctypes.c_void_p),
-        ("message", ctypes.c_uint),
-        ("wParam", ctypes.c_size_t),
-        ("lParam", ctypes.c_ssize_t),
-        ("time", ctypes.c_uint),
-        ("pt", _WinPoint),
-        ("lPrivate", ctypes.c_uint),
-    ]
-
-
-class NativeMiddleButtonFilter(QAbstractNativeEventFilter):
-    """Catch middle clicks even when mpv's native child HWND consumes them."""
-
-    def __init__(self, callback: object) -> None:
-        super().__init__()
-        self.callback = callback
-
-    def nativeEventFilter(self, event_type: object, message: object) -> tuple[bool, int]:
-        if sys.platform == "win32":
-            try:
-                native_message = ctypes.cast(int(message), ctypes.POINTER(_WinMessage)).contents
-                if native_message.message == WM_MBUTTONDOWN:
-                    QTimer.singleShot(0, self.callback)
-            except (TypeError, ValueError, OSError):
-                pass
-        return False, 0
-
-
 class FolderScanWorker(QThread):
     """Scan folders for media files without blocking the UI."""
 
@@ -108,7 +71,6 @@ class MainWindow(QMainWindow):
         self.buffering_indicator.hide()
         self.thumbnail_preview = QLabel(self.video); self.thumbnail_preview.setStyleSheet("background:#080808;border:1px solid #444;padding:3px;"); self.thumbnail_preview.hide()
         self.track_menus = TrackMenuFactory(self)
-        self.pip_window: PiPWindow | None = None
         self.welcome_window: WelcomeWindow | None = None
         self.history_window: HistoryWindow | None = None
         self.filters_window: FiltersWindow | None = None
@@ -127,22 +89,11 @@ class MainWindow(QMainWindow):
         self._cover_mode = False
         self._chrome_visible = True
         self._is_playing = False
-        self._chrome_animation: QParallelAnimationGroup | None = None
-        self._mini_mode = False
-        self._mini_transitioning = False
-        self._mini_transition_serial = 0
-        self._native_middle_filter: NativeMiddleButtonFilter | None = None
-        self._pre_mini_geometry = QRect()
-        self._pre_mini_fullscreen = False
-        self._pre_mini_maximized = False
-        self._pre_mini_playlist_visible = False
-        self._pip_mode = False
-        self._pre_pip_geometry = QRect()
+        self.overlays = OverlayController(self)
+        self.window_modes = WindowModeController(self)
+        self.inputs = PlayerInputController(self)
         self.central_shell: QWidget | None = None
         self.app_menu_bar: QMenuBar | None = None
-        self._hide_chrome_timer = QTimer(self)
-        self._hide_chrome_timer.setSingleShot(True)
-        self._hide_chrome_timer.timeout.connect(self._hide_player_chrome)
         self._current_duration = 0.0
         self._current_position = 0.0
         self._loaded_playlist_item: PlaylistItem | None = None
@@ -163,6 +114,14 @@ class MainWindow(QMainWindow):
             self.open_files(startup_files, append=False)
         elif self.settings.get("startup.show_welcome", True):
             QTimer.singleShot(0, self._show_welcome)
+
+    @property
+    def _mini_mode(self) -> bool:
+        return self.window_modes.is_compact
+
+    @property
+    def _pip_mode(self) -> bool:
+        return self.window_modes.is_pip
 
     def open_files(self, files: list[Path], append: bool = False) -> None:
         """Add files to the playlist and start playback."""
@@ -213,10 +172,8 @@ class MainWindow(QMainWindow):
             self.title_bar.hide()
             self.control_bar.hide()
         else:
-            if self.app_menu_bar is not None: self.app_menu_bar.setVisible(self._chrome_visible and not self._pip_mode)
-            self.title_bar.show()
-            self.control_bar.show()
-            self._position_overlays()
+            self.window_modes.sync_from_window()
+            self._apply_mode_layout()
 
     def closeEvent(self, event: QCloseEvent) -> None:
         self._save_geometry()
@@ -225,8 +182,6 @@ class MainWindow(QMainWindow):
             self.history.save_position(current.source, current.title, self._current_position, self._current_duration)
         self.settings.set("playback.volume", self.control_bar.volume.slider.value())
         self.settings.save()
-        if self.pip_window is not None:
-            self.pip_window.close()
         self.playlist_panel.shutdown()
         if self._thumbnail_worker and self._thumbnail_worker.isRunning():
             self._thumbnail_worker.cancel(); self._thumbnail_worker.wait(2000)
@@ -311,8 +266,8 @@ class MainWindow(QMainWindow):
         self.video.setParent(central)
         self.title_bar.setParent(central)
         self.control_bar.setParent(central)
+        self.playlist_panel.setParent(central)
         for chrome in (self.title_bar, self.control_bar):
-            chrome.setAttribute(Qt.WidgetAttribute.WA_NativeWindow, True)
             chrome.raise_()
         self.drop_overlay.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.drop_overlay.setStyleSheet(
@@ -385,9 +340,7 @@ class MainWindow(QMainWindow):
         app = QApplication.instance()
         if app is not None:
             app.installEventFilter(self)
-            if sys.platform == "win32":
-                self._native_middle_filter = NativeMiddleButtonFilter(self._handle_native_middle_click)
-                app.installNativeEventFilter(self._native_middle_filter)
+            app.installEventFilter(self.inputs)
         self.video.installEventFilter(self)
         self.title_bar.installEventFilter(self)
         self.control_bar.installEventFilter(self)
@@ -400,7 +353,6 @@ class MainWindow(QMainWindow):
         bar = QMenuBar(self.central_shell)
         self.app_menu_bar = bar
         bar.setNativeMenuBar(False)
-        bar.setAttribute(Qt.WidgetAttribute.WA_NativeWindow, True)
         bar.setStyleSheet("QMenuBar { background: #0d0d0d; color: #eeeeee; padding-left: 6px; } QMenuBar::item { padding: 7px 10px; background: transparent; } QMenuBar::item:selected { background: #242424; }")
         menus = {
             "File": [("Open File…","open_file",self._choose_files),("Open URL…","open_url",lambda:self._show_url_dialog("")),("History","history",self._show_history),("Quit","quit",self.close)],
@@ -433,34 +385,6 @@ class MainWindow(QMainWindow):
         for action_id,action in self._menu_actions.items():action.setShortcut(QKeySequence(reverse.get(action_id,"")))
 
     def eventFilter(self, watched: object, event: QEvent) -> bool:
-        if event.type() == QEvent.Type.KeyPress and event.key() == Qt.Key.Key_Escape and not event.isAutoRepeat():
-            focus = QApplication.focusWidget()
-            in_player = focus is None or focus is self or (focus is not None and (self.isAncestorOf(focus) or self._is_playlist_widget(focus)))
-            if QApplication.activeModalWidget() is None and in_player:
-                self._pause_and_minimize()
-                event.accept()
-                return True
-        if event.type() == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.MiddleButton:
-            # Use one path for both the native mpv surface and Qt controls.
-            # Windows may report either a QWidget or a QWindow as the receiver.
-            if self.isVisible() and self.frameGeometry().contains(QCursor.pos()):
-                if not self._mini_transitioning:
-                    self._toggle_mini_mode()
-                event.accept()
-                return True
-        if event.type() == QEvent.Type.KeyPress and event.key() == Qt.Key.Key_Space and not event.isAutoRepeat():
-            focus = QApplication.focusWidget()
-            editing = isinstance(focus, (QLineEdit, QTextEdit, QPlainTextEdit, QAbstractSpinBox, QComboBox, QAbstractButton))
-            in_player = focus is None or focus is self or (focus is not None and (self.isAncestorOf(focus) or self._is_playlist_widget(focus)))
-            if QApplication.activeModalWidget() is None and in_player and not editing:
-                self.player.play_pause()
-                event.accept()
-                return True
-        if event.type() == QEvent.Type.MouseButtonPress and self.playlist_panel.isVisible():
-            widget = watched if isinstance(watched, QWidget) else None
-            inside_panel = self.playlist_panel.frameGeometry().contains(QCursor.pos())
-            if widget is not self.control_bar.playlist_button and not inside_panel and not self._is_playlist_widget(widget):
-                self._set_playlist_visible(False)
         if self._handle_window_edge_event(watched, event):
             return True
         if watched is self.title_bar or watched is self.control_bar:
@@ -495,7 +419,6 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(200, self._enter_mini_mode)
         self.player.set_cover_mode(False)
         self.osd.show_message("Playing")
-        QTimer.singleShot(250, self._position_overlays)
 
     def _time_changed(self, seconds: float) -> None:
         self._current_position = seconds
@@ -625,7 +548,7 @@ class MainWindow(QMainWindow):
             self.playlist_panel.set_side(str(self.settings.get("ui.sidebar_side", "right")))
             self.playlist_panel.set_current_tab(str(self.settings.get("ui.sidebar_tab", "playlist")))
             if not self.settings.get("ui.hide_controls_while_playing", True):
-                self._hide_chrome_timer.stop(); self._show_player_chrome()
+                self.overlays.hide_timer.stop(); self._show_player_chrome()
             self._load_keybindings()
 
     def _paste_playlist_content(self) -> None:
@@ -729,187 +652,49 @@ class MainWindow(QMainWindow):
             self.player.change_volume(delta)
 
     def _handle_key(self, event: QKeyEvent) -> None:
-        key = event.key()
-        modifiers = event.modifiers()
-        if key == Qt.Key.Key_Space:
-            self.player.play_pause()
-        elif key == Qt.Key.Key_Left:
-            self.player.seek_relative(-5)
-        elif key == Qt.Key.Key_Right:
-            self.player.seek_relative(5)
-        elif key == Qt.Key.Key_Up:
-            self.player.change_volume(5)
-        elif key == Qt.Key.Key_Down:
-            self.player.change_volume(-5)
-        elif key == Qt.Key.Key_M and not modifiers & Qt.KeyboardModifier.ControlModifier:
-            self.player.toggle_mute()
-        elif key == Qt.Key.Key_M and modifiers & Qt.KeyboardModifier.ControlModifier:
-            self._toggle_mini_mode()
-        elif key in {Qt.Key.Key_Return, Qt.Key.Key_Enter}:
-            if not self.isFullScreen():
-                self._toggle_fullscreen()
-        elif key == Qt.Key.Key_F:
-            self._toggle_fullscreen()
-        elif key == Qt.Key.Key_C:
-            self._toggle_cover_mode()
-        elif key == Qt.Key.Key_Escape:
-            self._pause_and_minimize()
-        elif key == Qt.Key.Key_P:
-            self._toggle_playlist()
-        elif key == Qt.Key.Key_T:
-            self._toggle_always_on_top()
-        elif key == Qt.Key.Key_S:
-            self._save_screenshot()
-        elif key == Qt.Key.Key_O and modifiers & Qt.KeyboardModifier.ControlModifier:
-            self._choose_files()
-        elif key == Qt.Key.Key_U and modifiers & Qt.KeyboardModifier.ControlModifier:
-            self._show_url_dialog("")
-        elif key == Qt.Key.Key_Period:
-            self._play_next()
-        elif key == Qt.Key.Key_Comma:
-            self._play_previous()
+        self.inputs.handle_key(event)
 
     def _toggle_fullscreen(self) -> None:
-        if self._mini_mode:
-            self._exit_mini_mode()
-        if self.isFullScreen():
-            self.showNormal()
-            self.control_bar.set_fullscreen(False)
+        self.window_modes.toggle_fullscreen()
+        if not self.isFullScreen():
             self.unsetCursor()
-        else:
-            self.showFullScreen()
-            self.control_bar.set_fullscreen(True)
         self._show_player_chrome()
         if self._is_playing:
             self._schedule_hide_player_chrome(3000)
-        self._position_overlays()
 
     def _pause_and_minimize(self) -> None:
         self.player.set_paused(True)
         self.showMinimized()
 
     def _toggle_mini_mode(self) -> None:
-        if self._mini_transitioning:
-            return
-        if self._mini_mode:
-            self._exit_mini_mode()
-        else:
-            self._enter_mini_mode()
-
-    def _handle_native_middle_click(self) -> None:
-        """Toggle from a native middle click located inside the player window."""
-        if self._mini_transitioning or not self.isVisible() or self.isMinimized():
-            return
-        if self.frameGeometry().contains(QCursor.pos()):
-            self._toggle_mini_mode()
+        self.window_modes.toggle_compact()
 
     def _enter_mini_mode(self) -> None:
-        if self._mini_mode or self._mini_transitioning:
-            return
-        self._mini_transitioning = True
-        self._mini_transition_serial += 1
-        serial = self._mini_transition_serial
-        self._stop_chrome_animation()
-        self._hide_chrome_timer.stop()
-        previous_geometry = QRect(self.geometry())
-        self._pre_mini_geometry = previous_geometry
-        self._pre_mini_fullscreen = self.isFullScreen()
-        self._pre_mini_maximized = self.isMaximized()
-        self._pre_mini_playlist_visible = self.playlist_panel.isVisible()
-        self._mini_mode = True
-        self.playlist_panel.hide()
-        self.control_bar.set_playlist_visible(False)
-        compact_height = TITLE_BAR_HEIGHT + APP_MENU_HEIGHT + CONTROL_BAR_HEIGHT
-        if self._pre_mini_fullscreen or self._pre_mini_maximized:
-            self.showNormal()
-        self.setMaximumHeight(16777215)
-        self.setMinimumSize(420, compact_height)
-        self.setMaximumHeight(compact_height)
-        target = QRect(previous_geometry.left(), previous_geometry.top(), max(420, previous_geometry.width()), compact_height)
-        self.setGeometry(target)
-        self.control_bar.set_fullscreen(False)
-        self._chrome_visible = True
-        self.title_bar.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
-        self.control_bar.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
-        self._position_overlays()
-        self.raise_()
-        self.activateWindow()
-        QTimer.singleShot(0, lambda: self._stabilize_compact_geometry(serial, target))
-        QTimer.singleShot(80, lambda: self._stabilize_compact_geometry(serial, target))
-        QTimer.singleShot(120, lambda: self._finish_mini_transition(serial))
+        self.window_modes.enter_compact()
 
     def _exit_mini_mode(self) -> None:
-        if not self._mini_mode or self._mini_transitioning:
-            return
-        self._mini_transitioning = True
-        self._mini_transition_serial += 1
-        serial = self._mini_transition_serial
-        self._stop_chrome_animation()
-        self._hide_chrome_timer.stop()
-        self._mini_mode = False
-        self.setMaximumHeight(16777215)
-        self.setMinimumSize(*MIN_WINDOW_SIZE)
-        if self._pre_mini_fullscreen:
-            self.showFullScreen()
-            self.control_bar.set_fullscreen(True)
-        elif self._pre_mini_maximized:
-            self.showMaximized()
-            self.control_bar.set_fullscreen(False)
-        else:
-            self.showNormal()
-            if self._pre_mini_geometry.isValid():
-                self.setGeometry(self._pre_mini_geometry)
-            self.control_bar.set_fullscreen(False)
-        if self._pre_mini_playlist_visible:
-            self.playlist_panel.show()
-            self.control_bar.set_playlist_visible(True)
-        self._chrome_visible = True
+        self.window_modes.exit_compact()
+
+    def _prepare_mode_transition(self) -> None:
+        """Stop transient UI work before one atomic window-state transition."""
+        self.overlays.stop_transients()
+
+    def _apply_mode_layout(self) -> None:
+        """Apply chrome visibility for the controller's current explicit mode."""
+        visible = self._chrome_visible and not self._pip_mode
         if self.app_menu_bar is not None:
-            self.app_menu_bar.show()
-        self.title_bar.show()
-        self.control_bar.show()
-        self.title_bar.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
-        self.control_bar.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
+            self.app_menu_bar.setVisible(visible)
+        self.title_bar.setVisible(visible)
+        self.control_bar.setVisible(visible)
+        self.title_bar.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, not visible)
+        self.control_bar.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, not visible)
         self._position_overlays()
-        QTimer.singleShot(0, lambda: self._stabilize_restored_geometry(serial))
-        QTimer.singleShot(80, lambda: self._stabilize_restored_geometry(serial))
-        QTimer.singleShot(120, lambda: self._finish_mini_transition(serial))
-
-    def _stop_chrome_animation(self) -> None:
-        """Stop an overlay animation before changing the window layout."""
-        if self._chrome_animation is not None:
-            self._chrome_animation.stop()
-            self._chrome_animation.deleteLater()
-            self._chrome_animation = None
-
-    def _stabilize_compact_geometry(self, serial: int, target: QRect) -> None:
-        """Reapply compact geometry after Windows finishes a state change."""
-        if serial != self._mini_transition_serial or not self._mini_mode:
-            return
-        self.setGeometry(target)
-        self._position_overlays()
-
-    def _stabilize_restored_geometry(self, serial: int) -> None:
-        """Restore the precise pre-compact geometry/state after native events settle."""
-        if serial != self._mini_transition_serial or self._mini_mode:
-            return
-        if self._pre_mini_fullscreen:
-            if not self.isFullScreen():
-                self.showFullScreen()
-        elif self._pre_mini_maximized:
-            if not self.isMaximized():
-                self.showMaximized()
-        elif self._pre_mini_geometry.isValid():
-            self.showNormal()
-            self.setGeometry(self._pre_mini_geometry)
-        self._position_overlays()
-
-    def _finish_mini_transition(self, serial: int) -> None:
-        if serial != self._mini_transition_serial:
-            return
-        self._mini_transitioning = False
-        self._position_overlays()
-        if not self._mini_mode and self._is_playing:
+        if visible:
+            self.title_bar.raise_()
+            if self.app_menu_bar is not None:
+                self.app_menu_bar.raise_()
+            self.control_bar.raise_()
+        if self._is_playing and not self._mini_mode and not self._pip_mode:
             self._schedule_hide_player_chrome(3000)
 
     def _toggle_cover_mode(self) -> None:
@@ -920,11 +705,7 @@ class MainWindow(QMainWindow):
         self.osd.show_message("Video Mode: Cover Screen" if self._cover_mode else "Video Mode: Fit Screen")
 
     def _toggle_maximized(self) -> None:
-        if self._mini_mode:
-            self._exit_mini_mode()
-        self.showNormal() if self.isMaximized() else self.showMaximized()
-        self.title_bar.set_maximized(self.isMaximized())
-        self._position_overlays()
+        self.window_modes.toggle_maximized()
 
     def _toggle_playlist(self) -> None:
         if self._mini_mode:
@@ -951,18 +732,9 @@ class MainWindow(QMainWindow):
         return False
 
     def _toggle_pip(self) -> None:
-        self._pip_mode = not self._pip_mode
-        if self._pip_mode:
-            self._pre_pip_geometry = self.geometry()
-            self.playlist_panel.hide(); self.title_bar.hide(); self.control_bar.hide()
-            self.setMinimumSize(240, 140); self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
-            screen = self.screen() or QApplication.primaryScreen(); area = screen.availableGeometry() if screen else QRect(0, 0, 1280, 720)
-            self.showNormal(); self.setGeometry(area.right() - 380, area.bottom() - 230, 360, 210)
-        else:
-            self.setMinimumSize(*MIN_WINDOW_SIZE); self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, bool(self.settings.get("window.always_on_top", False))); self.showNormal()
-            if self._pre_pip_geometry.isValid(): self.setGeometry(self._pre_pip_geometry)
-            self._show_player_chrome()
-        self._position_overlays(); self.raise_(); self.activateWindow()
+        self.window_modes.toggle_pip()
+        self.raise_()
+        self.activateWindow()
         self.osd.show_message(f"Picture in Picture: {'On' if self._pip_mode else 'Off'}")
 
     def _video_clicked(self) -> None:
@@ -1007,7 +779,7 @@ class MainWindow(QMainWindow):
         self._is_playing = not paused
         self._show_player_chrome()
         if paused or self._mini_mode:
-            self._hide_chrome_timer.stop()
+            self.overlays.hide_timer.stop()
         else:
             self._schedule_hide_player_chrome(3000)
 
@@ -1024,149 +796,19 @@ class MainWindow(QMainWindow):
             self._schedule_hide_player_chrome(3000)
 
     def _schedule_hide_player_chrome(self, delay_ms: int) -> None:
-        if self._mini_mode:
-            return
-        if self.settings.get("ui.hide_controls_while_playing", True):
-            configured = max(100, int(self.settings.get("ui.osc_hide_delay_ms", delay_ms)))
-            self._hide_chrome_timer.start(configured)
-        else:
-            self._hide_chrome_timer.stop()
-            if not self._chrome_visible: self._show_player_chrome()
+        self.overlays.schedule_hide(delay_ms)
 
     def _show_player_chrome(self) -> None:
-        self._animate_player_chrome(True)
+        self.overlays.show()
 
     def _hide_player_chrome(self) -> None:
-        if self._is_playing and not self._mini_mode:
-            self._animate_player_chrome(False)
+        self.overlays.hide()
 
     def _animate_player_chrome(self, show: bool) -> None:
-        if self.central_shell is None or self.isMinimized():
-            return
-        if self._pip_mode:
-            self.app_menu_bar.hide(); self.title_bar.hide(); self.control_bar.hide(); return
-        if self._mini_mode:
-            self._chrome_visible = True
-            self.app_menu_bar.show()
-            self.title_bar.show()
-            self.control_bar.show()
-            self.title_bar.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
-            self.control_bar.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
-            self.title_bar.raise_()
-            self.control_bar.raise_()
-            self._position_overlays()
-            return
-        if self._chrome_visible == show and self._chrome_animation is None:
-            return
-        if self._chrome_animation is not None:
-            self._chrome_animation.stop()
-        self._chrome_visible = show
-        if show:
-            self.app_menu_bar.show()
-        shell_rect = self.central_shell.rect()
-        osc_position = str(self.settings.get("ui.osc_position", "floating"))
-        start_title = self.title_bar.geometry()
-        start_menu = self.app_menu_bar.geometry()
-        start_control = self.control_bar.geometry()
-        if not start_title.isValid() or start_title.width() != shell_rect.width():
-            start_title = QRect(0, 0 if show else -TITLE_BAR_HEIGHT, shell_rect.width(), TITLE_BAR_HEIGHT)
-        if not start_menu.isValid() or start_menu.width() != shell_rect.width():
-            start_menu = QRect(0, TITLE_BAR_HEIGHT if show else -APP_MENU_HEIGHT, shell_rect.width(), APP_MENU_HEIGHT)
-        if not start_control.isValid() or start_control.width() != shell_rect.width():
-            y = shell_rect.height() - CONTROL_BAR_HEIGHT if show else shell_rect.height()
-            start_control = QRect(0, y, shell_rect.width(), CONTROL_BAR_HEIGHT)
-        target_title = QRect(0, 0 if show else -TITLE_BAR_HEIGHT, shell_rect.width(), TITLE_BAR_HEIGHT)
-        target_menu = QRect(0, TITLE_BAR_HEIGHT if show else -APP_MENU_HEIGHT, shell_rect.width(), APP_MENU_HEIGHT)
-        if osc_position == "top":
-            target_control = QRect(0, TITLE_BAR_HEIGHT if show else -CONTROL_BAR_HEIGHT, shell_rect.width(), CONTROL_BAR_HEIGHT)
-        else:
-            target_control = QRect(0, shell_rect.height() - CONTROL_BAR_HEIGHT if show else shell_rect.height(), shell_rect.width(), CONTROL_BAR_HEIGHT)
-        self.title_bar.show()
-        self.control_bar.show()
-        self.title_bar.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, not show)
-        self.control_bar.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, not show)
-        self.title_bar.raise_()
-        self.app_menu_bar.raise_()
-        self.control_bar.raise_()
-        group = QParallelAnimationGroup(self)
-        for widget, start, target in ((self.title_bar, start_title, target_title), (self.app_menu_bar, start_menu, target_menu), (self.control_bar, start_control, target_control)):
-            animation = QPropertyAnimation(widget, b"geometry", group)
-            animation.setDuration(180 if show else 220)
-            animation.setEasingCurve(QEasingCurve.Type.OutCubic if show else QEasingCurve.Type.InCubic)
-            animation.setStartValue(start)
-            animation.setEndValue(target)
-            group.addAnimation(animation)
-
-        def finish() -> None:
-            if not show:
-                self.app_menu_bar.hide()
-                self.title_bar.hide()
-                self.control_bar.hide()
-            else:
-                self.title_bar.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
-                self.control_bar.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
-                self.title_bar.raise_()
-                self.app_menu_bar.raise_()
-                self.control_bar.raise_()
-            self._chrome_animation = None
-
-        group.finished.connect(finish)
-        self._chrome_animation = group
-        group.start()
+        self.overlays.animate(show)
 
     def _position_overlays(self) -> None:
-        if self.central_shell is not None:
-            shell_rect = self.central_shell.rect()
-            osc_position = str(self.settings.get("ui.osc_position", "floating"))
-            if self._pip_mode:
-                self.video.setGeometry(shell_rect); self.app_menu_bar.hide(); self.title_bar.hide(); self.control_bar.hide()
-            elif self._mini_mode:
-                self.video.setGeometry(QRect())
-            elif osc_position == "bottom":
-                self.video.setGeometry(0, TITLE_BAR_HEIGHT, shell_rect.width(), max(0, shell_rect.height() - TITLE_BAR_HEIGHT - CONTROL_BAR_HEIGHT))
-            elif osc_position == "top":
-                self.video.setGeometry(0, TITLE_BAR_HEIGHT + CONTROL_BAR_HEIGHT, shell_rect.width(), max(0, shell_rect.height() - TITLE_BAR_HEIGHT - CONTROL_BAR_HEIGHT))
-            else:
-                self.video.setGeometry(shell_rect)
-            if self._chrome_animation is None and not self._pip_mode:
-                if self._mini_mode:
-                    title_y = 0
-                    menu_y = TITLE_BAR_HEIGHT
-                    control_y = TITLE_BAR_HEIGHT + APP_MENU_HEIGHT
-                    self._chrome_visible = True
-                else:
-                    title_y = 0 if self._chrome_visible else -TITLE_BAR_HEIGHT
-                    menu_y = TITLE_BAR_HEIGHT if self._chrome_visible else -APP_MENU_HEIGHT
-                    if osc_position == "top": control_y = TITLE_BAR_HEIGHT if self._chrome_visible else -CONTROL_BAR_HEIGHT
-                    else: control_y = shell_rect.height() - CONTROL_BAR_HEIGHT if self._chrome_visible else shell_rect.height()
-                self.title_bar.setGeometry(0, title_y, shell_rect.width(), TITLE_BAR_HEIGHT)
-                if self.app_menu_bar is not None: self.app_menu_bar.setGeometry(0, menu_y, shell_rect.width(), APP_MENU_HEIGHT)
-                self.control_bar.setGeometry(0, control_y, shell_rect.width(), CONTROL_BAR_HEIGHT)
-                self.title_bar.setVisible((self._chrome_visible or self._mini_mode) and not self.isMinimized())
-                self.control_bar.setVisible((self._chrome_visible or self._mini_mode) and not self.isMinimized())
-                if self.app_menu_bar is not None: self.app_menu_bar.setVisible((self._chrome_visible or self._mini_mode) and not self.isMinimized() and not self._pip_mode)
-                if self._chrome_visible and not self.isMinimized():
-                    self.title_bar.raise_()
-                    if self.app_menu_bar is not None: self.app_menu_bar.raise_()
-                    self.control_bar.raise_()
-        rect = self.video.rect()
-        side = str(self.settings.get("ui.sidebar_side", "right"))
-        panel_width = min(max(240, int(self.settings.get("ui.sidebar_width", PLAYLIST_PANEL_WIDTH))), min(600, rect.width()))
-        panel_x = 0 if side == "left" else rect.width() - panel_width
-        self.playlist_panel.set_side(side)
-        panel_top_left = self.video.mapToGlobal(QPoint(panel_x, 0))
-        self.playlist_panel.setGeometry(panel_top_left.x(), panel_top_left.y(), panel_width, rect.height())
-        if self.playlist_panel.isVisible():
-            self.playlist_panel.raise_()
-            if self._chrome_visible:
-                self.title_bar.raise_()
-                self.control_bar.raise_()
-        self.drop_overlay.setGeometry(rect)
-        self.buffering_indicator.adjustSize()
-        self.buffering_indicator.move((rect.width() - self.buffering_indicator.width()) // 2, (rect.height() - self.buffering_indicator.height()) // 2)
-        if self.osd.isVisible():
-            self.osd.adjustSize()
-            self.osd.move((rect.width() - self.osd.width()) // 2, max(56, rect.height() // 2 - 28))
+        self.overlays.position()
 
     def _start_window_drag(self, global_pos: QPoint) -> None:
         if self.isMaximized():
@@ -1183,8 +825,7 @@ class MainWindow(QMainWindow):
         height = int(self.settings.get("window.height", DEFAULT_WINDOW_SIZE[1]))
         compact_height = TITLE_BAR_HEIGHT + APP_MENU_HEIGHT + CONTROL_BAR_HEIGHT
         # Older compact-mode builds could persist the collapsed strip as the
-        # normal window geometry when they were closed during a native HWND
-        # recreation. Recover those installations on the next launch.
+        # normal geometry. Recover those installations on the next launch.
         if height <= compact_height:
             height = DEFAULT_WINDOW_SIZE[1]
             self.settings.set("window.height", height)
@@ -1226,9 +867,12 @@ class MainWindow(QMainWindow):
 
     def _save_geometry(self) -> None:
         if self._mini_mode:
-            self.settings.set("window.maximized", self._pre_mini_maximized)
-            geometry = self._pre_mini_geometry
-            if geometry.isValid() and not self._pre_mini_fullscreen:
+            snapshot = self.window_modes.compact_snapshot
+            if snapshot is None:
+                return
+            self.settings.set("window.maximized", snapshot.mode is WindowMode.MAXIMIZED)
+            geometry = snapshot.geometry
+            if geometry.isValid() and snapshot.mode is WindowMode.NORMAL:
                 self.settings.set("window.width", geometry.width())
                 self.settings.set("window.height", geometry.height())
                 self.settings.set("window.x", geometry.x())

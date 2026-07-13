@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from PyQt6.QtCore import QObject, QTimer, pyqtSignal
+from PyQt6.QtCore import QEventLoop, QObject, QTimer, pyqtSignal
 
 _DLL_DIRECTORY_HANDLES = []
 
@@ -27,6 +27,7 @@ class PlayerBackend(QObject):
     fileEnded = pyqtSignal()
     loaded = pyqtSignal(str)
     error = pyqtSignal(str)
+    rendererReady = pyqtSignal()
 
     def __init__(self, video_widget: QObject | None = None, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -43,7 +44,12 @@ class PlayerBackend(QObject):
         self._speed = 1.0
         self._ended_emitted = False
         self._buffering = False
-        self._load_mpv(video_widget)
+        self._video_widget = video_widget
+        self._load_mpv()
+        if video_widget is not None and hasattr(video_widget, "set_backend"):
+            video_widget.rendererReady.connect(self.rendererReady)
+            video_widget.rendererError.connect(self.error)
+            video_widget.set_backend(self)
         self.poll_timer = QTimer(self)
         self.poll_timer.setInterval(250)
         self.poll_timer.timeout.connect(self._poll_state)
@@ -209,15 +215,30 @@ class PlayerBackend(QObject):
         self.mpv.ab_loop_b = "no" if end is None else end
 
     def shutdown(self) -> None:
-        """Terminate mpv."""
+        """Stop playback, release GL resources, then terminate the mpv core."""
         self.poll_timer.stop()
         if self.mpv is not None:
             try:
+                if self.is_loaded:
+                    self.mpv.command("stop")
+                    self._settle_shutdown(100)
+                if self._video_widget is not None and hasattr(self._video_widget, "shutdown_renderer"):
+                    self._video_widget.shutdown_renderer()
+                    self._settle_shutdown(100)
                 self.mpv.terminate()
             except Exception as exc:
                 self.logger.debug("mpv terminate ignored: %s", exc)
+            finally:
+                self.mpv = None
 
-    def _load_mpv(self, video_widget: QObject | None) -> None:
+    @staticmethod
+    def _settle_shutdown(milliseconds: int) -> None:
+        """Let native decoder/render threads finish without blocking Qt teardown."""
+        loop = QEventLoop()
+        QTimer.singleShot(milliseconds, loop.quit)
+        loop.exec()
+
+    def _load_mpv(self) -> None:
         """Import python-mpv and create the player."""
         app_dir = Path(__file__).resolve().parents[1]
         root_dir = app_dir.parent
@@ -243,17 +264,13 @@ class PlayerBackend(QObject):
             "keep_open": True,
             "ytdl": False,
             "hwdec": "auto-safe",
+            "vo": "libmpv",
             "demuxer_max_bytes": "512MiB",
             "demuxer_max_back_bytes": "128MiB",
             "vd_lavc_threads": 0,
             "log_handler": self._mpv_log,
         }
-        if video_widget is not None:
-            base_kwargs["wid"] = str(int(video_widget.winId()))
-
         profiles: tuple[dict[str, Any], ...] = (
-            {"vo": "gpu-next", "gpu_api": "d3d11"},
-            {"vo": "gpu", "gpu_api": "d3d11"},
             {},
             {"hwdec": "no"},
         )

@@ -60,7 +60,7 @@ python main.py
 - A-B loop controls
 - Playback speed cycling
 - Screenshots saved as `CometPlayer_YYYYMMDD_HHMMSS.png`
-- Picture-in-picture shell
+- In-window compact and picture-in-picture modes with exact state restoration
 - Drag-and-drop files, folders, and URLs
 - Always-on-top toggle
 
@@ -76,7 +76,8 @@ python main.py
 | M | Mute or unmute |
 | F | Toggle fullscreen |
 | C | Toggle fit or cover-screen video mode |
-| Esc | Exit fullscreen |
+| Esc | Pause and minimize to the taskbar |
+| Middle mouse button | Toggle compact player mode |
 | P | Toggle playlist |
 | T | Toggle always on top |
 | S | Save screenshot |
@@ -84,3 +85,18 @@ python main.py
 | Ctrl+U | Open URL |
 | Period | Next item |
 | Comma | Previous item |
+
+## Window and rendering architecture
+
+- libmpv renders through `MpvRenderContext` into one Qt-owned `QOpenGLWidget`.
+- Title, menu, controls, OSD, and playlist are ordinary child overlays in the same Qt tree.
+- `WindowModeController` owns normal, maximized, fullscreen, compact, and PiP transitions.
+- `OverlayController` owns chrome animation and overlay geometry.
+- `PlayerInputController` owns application shortcuts, middle-click compact mode, and playlist outside-click behavior.
+- No native mpv child window, global native mouse hook, or delayed geometry correction is used.
+
+Run the regression suite from the workspace root:
+
+```powershell
+python -m unittest discover -s tests -v
+```

@@ -8,7 +8,7 @@ import os
 import sys
 from pathlib import Path
 
-from PyQt6.QtGui import QIcon
+from PyQt6.QtGui import QIcon, QSurfaceFormat
 from PyQt6.QtWidgets import QApplication, QMessageBox
 
 CURRENT_DIR = Path(__file__).resolve().parent
@@ -73,6 +73,12 @@ def main(argv: list[str] | None = None) -> int:
     """Start Comet Player."""
     args = parse_args(argv or sys.argv[1:])
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
+    surface_format = QSurfaceFormat()
+    surface_format.setRenderableType(QSurfaceFormat.RenderableType.OpenGL)
+    surface_format.setVersion(3, 3)
+    surface_format.setProfile(QSurfaceFormat.OpenGLContextProfile.CoreProfile)
+    surface_format.setSwapInterval(1)
+    QSurfaceFormat.setDefaultFormat(surface_format)
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
     app.setApplicationVersion(APP_VERSION)
