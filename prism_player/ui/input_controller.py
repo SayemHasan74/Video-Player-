@@ -27,6 +27,11 @@ class PlayerInputController(QObject):
 
     def eventFilter(self, watched: object, event: QEvent) -> bool:
         window = self.window
+        if event.type() in {
+            QEvent.Type.KeyPress, QEvent.Type.MouseMove, QEvent.Type.MouseButtonPress,
+            QEvent.Type.MouseButtonRelease, QEvent.Type.Wheel,
+        } and self._belongs_to_player(watched):
+            window._note_user_activity()
         if event.type() == QEvent.Type.KeyPress and not event.isAutoRepeat():
             if event.key() == Qt.Key.Key_Escape and self._player_can_receive_input():
                 window._pause_and_minimize()
@@ -48,6 +53,12 @@ class PlayerInputController(QObject):
             if widget is not window.control_bar.playlist_button and not inside_panel and not window._is_playlist_widget(widget):
                 window._set_playlist_visible(False)
         return False
+
+    def _belongs_to_player(self, watched: object) -> bool:
+        if watched is self.window:
+            return True
+        widget = watched if isinstance(watched, QWidget) else None
+        return bool(widget is not None and (self.window.isAncestorOf(widget) or self.window._is_playlist_widget(widget)))
 
     def handle_key(self, event: QKeyEvent) -> None:
         window = self.window

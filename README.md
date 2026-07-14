@@ -71,6 +71,8 @@ python main.py
 - In-window compact and picture-in-picture modes with exact state restoration
 - Drag-and-drop files, folders, and URLs
 - Always-on-top toggle
+- Local Python plugins with isolated lifecycle, event listeners, preferences, player/playlist APIs, menu actions, and sidebar tabs
+- Per-file crop, aspect ratio, and rotation state
 
 ## Keyboard Shortcuts
 
@@ -102,6 +104,30 @@ python main.py
 - `OverlayController` owns chrome animation and overlay geometry.
 - `PlayerInputController` owns application shortcuts, middle-click compact mode, and playlist outside-click behavior.
 - No native mpv child window, global native mouse hook, or delayed geometry correction is used.
+
+## Plugins
+
+Open **Plugins → Open Plugins Folder** and create one folder per plugin. A minimal plugin contains:
+
+```json
+{
+  "id": "example.hello",
+  "name": "Hello",
+  "version": "1.0.0",
+  "description": "A small example",
+  "entry": "main.py"
+}
+```
+
+```python
+def setup(api):
+    api.menu.add("Say hello", lambda: api.core.osd("Hello from a plugin"))
+    api.events.on("file.loaded", lambda event: print(event["source"]))
+    api.playlist.add_context_item("Inspect row", lambda index, source: print(index, source))
+    api.sidebar.register("Hello", lambda: "Plugin sidebar content")
+```
+
+Use **Plugins → Manage Plugins** to discover, enable, disable, and reload extensions. Plugins are trusted local Python code; enable only plugins you trust. Each plugin gets its own JSON preference file and all of its registrations are removed when it is disabled.
 
 Run the regression suite from the workspace root:
 

@@ -30,6 +30,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(description=APP_NAME)
     parser.add_argument("files", nargs="*", help="Media files to open")
+    parser.add_argument("--url", default="", help="Online media URL to open")
     parser.add_argument("--verbose", action="store_true", help="Enable debug logging")
     return parser.parse_args(argv)
 
@@ -91,7 +92,7 @@ def main(argv: list[str] | None = None) -> int:
     settings.load()
     history = HistoryManager()
     startup_files = normalize_startup_files(args.files)
-    window = MainWindow(settings, history, startup_files)
+    window = MainWindow(settings, history, startup_files, args.url)
     window.show()
     return app.exec()
 

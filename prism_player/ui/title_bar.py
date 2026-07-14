@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from PyQt6.QtCore import QPoint, Qt, pyqtSignal
-from PyQt6.QtGui import QMouseEvent
+from PyQt6.QtGui import QColor, QMouseEvent, QPainter
 from PyQt6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QWidget
 
 from assets.icons import svg_icon
@@ -22,6 +22,8 @@ class TitleBar(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setAutoFillBackground(True)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
         self.setMinimumHeight(TITLE_BAR_HEIGHT)
         self.setMaximumHeight(TITLE_BAR_HEIGHT)
         self.setStyleSheet(
@@ -72,6 +74,12 @@ class TitleBar(QWidget):
         self.min_button.clicked.connect(self.minimizeClicked.emit)
         self.max_button.clicked.connect(self.maximizeClicked.emit)
         self.close_button.clicked.connect(self.closeClicked.emit)
+
+    def paintEvent(self, event: object) -> None:
+        """Paint an opaque strip even when composed over QOpenGLWidget."""
+        painter = QPainter(self)
+        painter.fillRect(self.rect(), QColor("#0d0d0d"))
+        painter.fillRect(0, max(0, self.height() - 1), self.width(), 1, QColor("#252525"))
 
     def set_title(self, title: str) -> None:
         """Set currently playing title."""

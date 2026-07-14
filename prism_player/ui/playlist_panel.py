@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Callable
 
 from PyQt6.QtCore import QEvent, QFile, QPoint, QSize, QThread, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QMouseEvent, QPalette, QResizeEvent
@@ -91,6 +92,8 @@ class PlaylistPanel(QWidget):
         self._history: dict[str, tuple[float,float]] = {}
         self._items_by_source: dict[str, PlaylistItem] = {}
         self._row_sources: tuple[str, ...] = ()
+        self._plugin_tab_ids: set[str] = set()
+        self._plugin_context_items: list[tuple[str, Callable[[int, str], None]]] = []
         self.setMinimumWidth(240)
         self.setMaximumWidth(600)
         self.setMouseTracking(True)
@@ -146,8 +149,10 @@ class PlaylistPanel(QWidget):
         self.chapters = QListWidget(); self.chapters.itemDoubleClicked.connect(lambda item: self.chapterActivated.emit(float(item.data(Qt.ItemDataRole.UserRole) or 0)))
         quick = QuickSettingsPanel(); quick.propertyChanged.connect(self.quickSettingChanged.emit)
         self.tabs.addTab(playlist_page, "Playlist"); self.tabs.addTab(self.chapters, "Chapters"); self.tabs.addTab(quick, "Quick Settings")
+        for index, name in enumerate(("playlist", "chapters", "quick_settings")):
+            self.tabs.tabBar().setTabData(index, name)
         self.quick_settings = quick
-        self.tabs.currentChanged.connect(lambda index: self.tabChanged.emit(("playlist", "chapters", "quick_settings")[max(0, min(index, 2))]))
+        self.tabs.currentChanged.connect(self._tab_changed)
         layout = QVBoxLayout(self)
         layout.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
         layout.setContentsMargins(8, 8, 8, 8)
@@ -180,8 +185,38 @@ class PlaylistPanel(QWidget):
         self._side = "left" if side == "left" else "right"
 
     def set_current_tab(self, name: str) -> None:
-        index = {"playlist": 0, "chapters": 1, "quick_settings": 2}.get(name, 0)
-        self.tabs.setCurrentIndex(index)
+        for index in range(self.tabs.count()):
+            if self.tabs.tabBar().tabData(index) == name:
+                self.tabs.setCurrentIndex(index)
+                return
+        self.tabs.setCurrentIndex(0)
+
+    def _tab_changed(self, index: int) -> None:
+        name = self.tabs.tabBar().tabData(index) if index >= 0 else "playlist"
+        self.tabChanged.emit(str(name or "playlist"))
+
+    def add_plugin_tab(self, tab_id: str, title: str, widget: QWidget) -> None:
+        key = f"plugin:{tab_id}"
+        self.remove_plugin_tab(tab_id)
+        index = self.tabs.addTab(widget, title)
+        self.tabs.tabBar().setTabData(index, key)
+        self._plugin_tab_ids.add(tab_id)
+
+    def remove_plugin_tab(self, tab_id: str) -> None:
+        key = f"plugin:{tab_id}"
+        for index in range(self.tabs.count() - 1, -1, -1):
+            if self.tabs.tabBar().tabData(index) == key:
+                widget = self.tabs.widget(index)
+                self.tabs.removeTab(index)
+                widget.deleteLater()
+        self._plugin_tab_ids.discard(tab_id)
+
+    def clear_plugin_tabs(self) -> None:
+        for tab_id in tuple(self._plugin_tab_ids):
+            self.remove_plugin_tab(tab_id)
+
+    def set_plugin_context_items(self, items: list[tuple[str, Callable[[int, str], None]]]) -> None:
+        self._plugin_context_items = list(items)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         edge = event.position().x() >= self.width() - 4 if self._side == "left" else event.position().x() <= 4
@@ -255,6 +290,11 @@ class PlaylistPanel(QWidget):
         if item is None: return
         index = self.list.row(item); source = str(item.data(Qt.ItemDataRole.UserRole) or "")
         menu = QMenu(self); play = menu.addAction("Play Now"); play_next = menu.addAction("Play Next"); menu.addSeparator(); remove = menu.addAction("Remove"); delete = menu.addAction("Delete File…"); reveal = menu.addAction("Show in File Explorer"); copy = menu.addAction("Copy path / URL")
+        plugin_actions: dict[object, Callable[[int, str], None]] = {}
+        if self._plugin_context_items:
+            menu.addSeparator()
+            for title, callback in self._plugin_context_items:
+                plugin_actions[menu.addAction(title)] = callback
         selected = menu.exec(self.list.mapToGlobal(point))
         if selected is play: self.itemActivated.emit(index)
         elif selected is play_next: self.playNextRequested.emit(index)
@@ -262,6 +302,7 @@ class PlaylistPanel(QWidget):
         elif selected is copy: QApplication.clipboard().setText(source)
         elif selected is reveal and source: __import__('subprocess').Popen(["explorer", "/select,", source])
         elif selected is delete and source and QMessageBox.question(self, "Delete file", f"Move {source} to the Recycle Bin?") == QMessageBox.StandardButton.Yes: QFile.moveToTrash(source); self.removeRequested.emit(index)
+        elif selected in plugin_actions: plugin_actions[selected](index, source)
 
     def set_chapters(self, chapters: list[dict]) -> None:
         self.chapters.clear()

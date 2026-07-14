@@ -74,6 +74,14 @@ class PlayerBackend(QObject):
         try:
             self.current_source = source
             self._ended_emitted = False
+            # A fresh file must publish its own timeline even when it happens
+            # to have almost the same duration as the previous playlist item.
+            # Keeping the old cached duration left the UI at 00:00 and made
+            # the seek bar reject input because MainWindow had reset its copy.
+            self._position = 0.0
+            self._duration = 0.0
+            self.timeChanged.emit(0.0)
+            self.durationChanged.emit(0.0)
             self.mpv.command("loadfile", source, "replace")
             if start_position > 1:
                 QTimer.singleShot(500, lambda: self.seek_absolute(start_position))
@@ -120,7 +128,7 @@ class PlayerBackend(QObject):
     def seek_absolute(self, seconds: float) -> None:
         """Seek to absolute seconds."""
         if self.is_loaded and self.mpv is not None:
-            self.mpv.command("seek", max(0.0, seconds), "absolute")
+            self.mpv.command("seek", max(0.0, float(seconds)), "absolute+exact")
 
     def set_volume(self, volume: int) -> None:
         """Set volume."""

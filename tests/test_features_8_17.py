@@ -7,7 +7,10 @@ import sys
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
+from PyQt6.QtCore import QPoint, Qt
+from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication
 
 
@@ -18,10 +21,14 @@ from core.filter_store import FilterStore
 from core.history_manager import HistoryManager
 from core.keybindings import KeyBindingStore
 from core.media_probe import matching_subtitles
+from core.player_backend import PlayerBackend
 from config.settings import SettingsStore
 from ui.auxiliary_windows import HistoryWindow, PreferencesWindow, WelcomeWindow
 from ui.filter_window import FiltersWindow, PRESETS
+from ui.main_window import MainWindow
 from ui.quick_settings import QuickSettingsPanel
+from ui.seekbar import SeekBar
+from ui.title_bar import TitleBar
 from utils.thumbnail import adaptive_sample_count, valid_jpeg
 
 
@@ -47,6 +54,85 @@ class FeatureTests(unittest.TestCase):
         panel.set_crop(640, 360, 10, 20)
         self.assertEqual(emitted[-1], ("crop", {"w": 640, "h": 360, "x": 10, "y": 20}))
         panel.deleteLater()
+
+    def test_seekbar_clicks_map_to_seconds_and_zero_duration_clears_progress(self) -> None:
+        bar = SeekBar()
+        bar.resize(110, 24)
+        bar.set_duration(100)
+        bar.show()
+        self.app.processEvents()
+        seeks: list[float] = []
+        bar.seekRequested.connect(seeks.append)
+        QTest.mouseClick(bar, Qt.MouseButton.LeftButton, pos=QPoint(80, 12))
+        self.assertAlmostEqual(seeks[-1], 75.0, delta=0.2)
+        self.assertEqual(bar.value(), 750)
+        bar.set_duration(0)
+        self.assertEqual(bar.value(), 0)
+        QTest.mouseClick(bar, Qt.MouseButton.LeftButton, pos=QPoint(100, 12))
+        self.assertEqual(bar.value(), 0)
+        bar.close()
+
+    def test_new_load_resets_timeline_and_exact_seek_reaches_mpv(self) -> None:
+        class FakeMpv:
+            def __init__(self) -> None:
+                self.commands: list[tuple] = []
+
+            def command(self, *values: object) -> None:
+                self.commands.append(values)
+
+        fake = FakeMpv()
+        with patch.object(PlayerBackend, "_load_mpv", lambda backend: setattr(backend, "mpv", fake)):
+            backend = PlayerBackend()
+        backend._duration = 2600.0
+        backend._position = 600.0
+        durations: list[float] = []
+        positions: list[float] = []
+        backend.durationChanged.connect(durations.append)
+        backend.timeChanged.connect(positions.append)
+        backend.load("next-episode.mkv")
+        self.assertEqual(durations, [0.0])
+        self.assertEqual(positions, [0.0])
+        self.assertEqual((backend._duration, backend._position), (0.0, 0.0))
+        backend.seek_absolute(42.5)
+        self.assertIn(("seek", 42.5, "absolute+exact"), fake.commands)
+        backend.poll_timer.stop()
+
+    def test_playlist_key_has_one_application_shortcut_and_opens_panel(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            settings = SettingsStore(root / "settings.json")
+            settings.load()
+            settings.set("startup.show_welcome", False)
+            history = HistoryManager(root / "history.sqlite3")
+            with patch.object(PlayerBackend, "_load_mpv", lambda backend: setattr(backend, "mpv", None)):
+                window = MainWindow(settings, history, [])
+            window.show()
+            window.activateWindow()
+            window.setFocus()
+            self.app.processEvents()
+            duplicate_shortcuts = [
+                shortcut for shortcut in window._binding_shortcuts
+                if shortcut.key().toString() == "P"
+            ]
+            self.assertEqual(duplicate_shortcuts, [])
+            playlist_action = window._menu_actions["playlist"]
+            self.assertEqual(playlist_action.shortcut().toString(), "P")
+            self.assertEqual(playlist_action.shortcutContext(), Qt.ShortcutContext.ApplicationShortcut)
+            self.assertFalse(window.playlist_panel.isVisible())
+            QTest.keyClick(window, Qt.Key.Key_P)
+            self.app.processEvents()
+            self.assertTrue(window.playlist_panel.isVisible())
+            window.close()
+
+    def test_title_bar_paints_an_opaque_background(self) -> None:
+        title = TitleBar()
+        title.resize(800, 40)
+        title.show()
+        self.app.processEvents()
+        pixel = title.grab().toImage().pixelColor(400, 8)
+        self.assertEqual(pixel.alpha(), 255)
+        self.assertEqual(pixel.name(), "#0d0d0d")
+        title.close()
 
     def test_filter_store_migrates_old_values_and_round_trips(self) -> None:
         with TemporaryDirectory() as directory:

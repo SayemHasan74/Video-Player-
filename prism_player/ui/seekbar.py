@@ -81,35 +81,54 @@ class SeekBar(LightBeamSlider):
         self.duration = 0.0
         self._user_dragging = False
         self.setRange(0, 1000)
-        self.sliderPressed.connect(self._pressed)
-        self.sliderReleased.connect(self._released)
-        self.sliderMoved.connect(self._moved)
 
     def set_duration(self, seconds: float) -> None:
         self.duration = max(0.0, float(seconds or 0.0))
+        if self.duration <= 0 and not self._user_dragging:
+            self.setValue(self.minimum())
 
     def set_position(self, seconds: float) -> None:
         if self._user_dragging or self.duration <= 0:
             return
         self.setValue(int((max(0.0, seconds) / self.duration) * 1000))
 
-    def _pressed(self) -> None:
-        self._user_dragging = True
+    def _value_at(self, x: float) -> int:
+        left = 5.0
+        track_width = max(1.0, self.width() - 10.0)
+        ratio = max(0.0, min(1.0, (x - left) / track_width))
+        return round(self.minimum() + ratio * (self.maximum() - self.minimum()))
 
-    def _released(self) -> None:
-        self._user_dragging = False
+    def _seek_to_mouse(self, event: QMouseEvent) -> None:
+        if self.duration <= 0:
+            return
+        value = self._value_at(event.position().x())
+        self.setValue(value)
+        self.seekRequested.emit((value / 1000) * self.duration)
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._user_dragging = True
+            self._seek_to_mouse(event)
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        if self._user_dragging and event.buttons() & Qt.MouseButton.LeftButton:
+            self._seek_to_mouse(event)
         if self.duration > 0:
-            self.seekRequested.emit((self.value() / 1000) * self.duration)
+            ratio = max(0.0, min(1.0, (event.position().x() - 5.0) / max(1.0, self.width() - 10.0)))
+            self.hoverRequested.emit(ratio * self.duration, event.position().toPoint())
+        event.accept()
 
-    def _moved(self, value: int) -> None:
-        if self.duration > 0:
-            self.seekRequested.emit((value / 1000) * self.duration)
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton and self._user_dragging:
+            self._seek_to_mouse(event)
+            self._user_dragging = False
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
 
-    def mouseMoveEvent(self,event:QMouseEvent)->None:
-        super().mouseMoveEvent(event)
-        if self.duration>0:
-            ratio=max(0.0,min(1.0,event.position().x()/max(1,self.width())))
-            self.hoverRequested.emit(ratio*self.duration,event.position().toPoint())
-
-    def leaveEvent(self,event:object)->None:
-        self.hoverEnded.emit(); super().leaveEvent(event)
+    def leaveEvent(self, event: object) -> None:
+        self.hoverEnded.emit()
+        super().leaveEvent(event)
