@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "prism_player"))
 
 from ui.window_mode import WindowMode, WindowModeController
+from ui.pip_window import PipWindow
 
 
 class _ControlBar:
@@ -37,9 +38,25 @@ class _TitleBar:
 
 
 class _Settings:
-    @staticmethod
-    def get(_key: str, default: object = None) -> object:
-        return default
+    def __init__(self) -> None:
+        self.values: dict[str, object] = {}
+
+    def get(self, key: str, default: object = None) -> object:
+        return self.values.get(key, default)
+
+    def set(self, key: str, value: object) -> None:
+        self.values[key] = value
+
+
+class _RenderVideo(QWidget):
+    """Tracks accidental renderer teardown during a top-level migration."""
+
+    def __init__(self, parent: QWidget) -> None:
+        super().__init__(parent)
+        self.shutdown_calls = 0
+
+    def shutdown_renderer(self, permanent: bool = True) -> None:
+        self.shutdown_calls += 1
 
 
 class _Window(QWidget):
@@ -49,9 +66,16 @@ class _Window(QWidget):
         self.move(80, 90)
         self.control_bar = _ControlBar()
         self.title_bar = _TitleBar()
+        self.central_shell = QWidget(self)
+        self.central_shell.setGeometry(self.rect())
+        self.video = _RenderVideo(self.central_shell)
+        self.video.setGeometry(self.central_shell.rect())
         self.playlist_panel = QWidget(self)
         self.playlist_panel.show()
         self.settings = _Settings()
+        self.player_session = object()
+        self.hdr_state = {"primaries": "bt.2020", "transfer": "pq"}
+        self.pip_window = PipWindow(self.settings)
         self._chrome_visible = True
         self.prepared = 0
         self.layouts = 0
@@ -79,6 +103,7 @@ class WindowModeTests(unittest.TestCase):
         self.controller = WindowModeController(self.window)
 
     def tearDown(self) -> None:
+        self.window.pip_window.shutdown(self.window)
         self.window.close()
 
     def test_repeated_compact_toggle_restores_exact_state(self) -> None:
@@ -106,11 +131,41 @@ class WindowModeTests(unittest.TestCase):
         self.assertTrue(self.window.playlist_panel.isVisible())
 
     def test_pip_round_trip_restores_geometry_and_playlist(self) -> None:
+        video = self.window.video
+        session = self.window.player_session
+        hdr_state = dict(self.window.hdr_state)
         self.controller.toggle_pip()
         self.app.processEvents()
         self.assertEqual(self.controller.mode, WindowMode.PIP)
-        self.assertTrue(bool(self.window.windowFlags() & Qt.WindowType.WindowStaysOnTopHint))
+        self.assertTrue(self.window.pip_window.isVisible())
+        self.assertIs(video.parentWidget(), self.window.pip_window.video_host)
+        self.assertFalse(self.window.isVisible())
+        self.assertLessEqual(self.window.pip_window.grip.width(), 24)
+        self.assertLessEqual(self.window.pip_window.grip.height(), 24)
+        self.assertIs(self.window.player_session, session)
+        self.assertEqual(self.window.hdr_state, hdr_state)
         self.controller.toggle_pip()
+        self.app.processEvents()
+        self.assertEqual(self.controller.mode, WindowMode.NORMAL)
+        self.assertIs(video.parentWidget(), self.window.central_shell)
+        self.assertFalse(self.window.pip_window.isVisible())
+        self.assertEqual(self.window.geometry(), self.original)
+        self.assertTrue(self.window.playlist_panel.isVisible())
+        self.assertIs(self.window.player_session, session)
+        self.assertEqual(self.window.hdr_state, hdr_state)
+        self.assertEqual(video.shutdown_calls, 0)
+
+    def test_fullscreen_request_from_pip_restores_surface_before_switching_mode(self) -> None:
+        video = self.window.video
+        self.controller.toggle_pip()
+        self.assertTrue(self.controller.is_pip)
+        self.controller.toggle_fullscreen()
+        self.app.processEvents()
+        self.assertFalse(self.window.pip_window.isVisible())
+        self.assertIs(video.parentWidget(), self.window.central_shell)
+        self.assertEqual(self.controller.mode, WindowMode.FULLSCREEN)
+        self.assertTrue(self.window.isFullScreen())
+        self.controller.toggle_fullscreen()
         self.app.processEvents()
         self.assertEqual(self.controller.mode, WindowMode.NORMAL)
         self.assertEqual(self.window.geometry(), self.original)

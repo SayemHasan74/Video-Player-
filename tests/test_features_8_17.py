@@ -7,6 +7,7 @@ import sys
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from PyQt6.QtCore import QPoint, Qt
@@ -20,7 +21,7 @@ sys.path.insert(0, str(ROOT / "prism_player"))
 from core.filter_store import FilterStore
 from core.history_manager import HistoryManager
 from core.keybindings import KeyBindingStore
-from core.media_probe import matching_subtitles
+from core.media_probe import matching_subtitles, probe_media
 from core.player_backend import PlayerBackend
 from config.settings import SettingsStore
 from ui.auxiliary_windows import HistoryWindow, PreferencesWindow, WelcomeWindow
@@ -61,9 +62,13 @@ class FeatureTests(unittest.TestCase):
         bar.set_duration(100)
         bar.show()
         self.app.processEvents()
+        previews: list[float] = []
         seeks: list[float] = []
+        bar.seekPreviewRequested.connect(previews.append)
         bar.seekRequested.connect(seeks.append)
         QTest.mouseClick(bar, Qt.MouseButton.LeftButton, pos=QPoint(80, 12))
+        self.assertEqual(len(previews), 1)
+        self.assertEqual(len(seeks), 1)
         self.assertAlmostEqual(seeks[-1], 75.0, delta=0.2)
         self.assertEqual(bar.value(), 750)
         bar.set_duration(0)
@@ -95,6 +100,16 @@ class FeatureTests(unittest.TestCase):
         self.assertEqual((backend._duration, backend._position), (0.0, 0.0))
         backend.seek_absolute(42.5)
         self.assertIn(("seek", 42.5, "absolute+exact"), fake.commands)
+        backend.seek_preview(75.0)
+        self.assertEqual(fake.commands[-1], ("seek", 75.0, "absolute+keyframes"))
+        command_count = len(fake.commands)
+        backend._paused = False
+        backend.complete_ui_seek(75.0)
+        self.assertEqual(len(fake.commands), command_count)
+        backend.seek_preview(80.0)
+        backend._paused = True
+        backend.complete_ui_seek(80.0)
+        self.assertEqual(fake.commands[-1], ("seek", 80.0, "absolute+exact"))
         backend.poll_timer.stop()
 
     def test_playlist_key_has_one_application_shortcut_and_opens_panel(self) -> None:
@@ -229,6 +244,35 @@ class FeatureTests(unittest.TestCase):
             unrelated = root / "Another.Movie.srt"
             media.touch(); subtitle.touch(); unrelated.touch()
             self.assertEqual(matching_subtitles(str(media)), [subtitle])
+
+    def test_media_probe_decodes_ffprobe_json_as_utf8_on_windows(self) -> None:
+        with TemporaryDirectory() as directory:
+            media = Path(directory) / "Stairway ⭐️.mp3"
+            media.touch()
+            payload = json.dumps(
+                {"format": {"tags": {"title": "Stairway ⭐️"}}},
+                ensure_ascii=False,
+            ).encode("utf-8")
+            probe_media.cache_clear()
+            with patch("core.media_probe.shutil.which", return_value="ffprobe"), patch(
+                "core.media_probe.subprocess.run",
+                return_value=SimpleNamespace(returncode=0, stdout=payload),
+            ):
+                result = probe_media(str(media))
+            self.assertEqual(result["format"]["tags"]["title"], "Stairway ⭐️")
+            probe_media.cache_clear()
+
+    def test_media_probe_treats_missing_subprocess_output_as_a_cache_miss(self) -> None:
+        with TemporaryDirectory() as directory:
+            media = Path(directory) / "broken.mp3"
+            media.touch()
+            probe_media.cache_clear()
+            with patch("core.media_probe.shutil.which", return_value="ffprobe"), patch(
+                "core.media_probe.subprocess.run",
+                return_value=SimpleNamespace(returncode=0, stdout=None),
+            ):
+                self.assertEqual(probe_media(str(media)), {})
+            probe_media.cache_clear()
 
 
 if __name__ == "__main__":

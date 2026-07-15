@@ -8,22 +8,41 @@ import os
 import sys
 from pathlib import Path
 
-from PyQt6.QtGui import QIcon, QSurfaceFormat
-from PyQt6.QtWidgets import QApplication, QMessageBox
-
 CURRENT_DIR = Path(__file__).resolve().parent
 if str(CURRENT_DIR) not in sys.path:
     sys.path.insert(0, str(CURRENT_DIR))
 _DLL_DIRECTORY_HANDLES = []
-for dll_dir in (CURRENT_DIR, CURRENT_DIR.parent):
-    os.environ["PATH"] = str(dll_dir) + os.pathsep + os.environ.get("PATH", "")
+
+
+def bootstrap_mpv_environment() -> tuple[Path, ...]:
+    """Expose libmpv before any Qt/application module can import python-mpv."""
+    frozen_root = Path(getattr(sys, "_MEIPASS", CURRENT_DIR))
+    candidates = (CURRENT_DIR / "bin", CURRENT_DIR, CURRENT_DIR.parent, frozen_root)
+    directories: list[Path] = []
+    seen: set[str] = set()
+    for directory in candidates:
+        key = str(directory.resolve()).casefold()
+        if key not in seen and directory.exists():
+            directories.append(directory)
+            seen.add(key)
+    existing = os.environ.get("PATH", "")
+    os.environ["PATH"] = os.pathsep.join([*(str(path) for path in directories), existing])
+    return tuple(directories)
+
+
+for dll_dir in bootstrap_mpv_environment():
     if hasattr(os, "add_dll_directory") and dll_dir.exists():
         _DLL_DIRECTORY_HANDLES.append(os.add_dll_directory(str(dll_dir)))
+
+# These imports intentionally happen after bootstrap_mpv_environment().
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QColorSpace, QIcon, QSurfaceFormat
+from PyQt6.QtWidgets import QApplication, QMessageBox
 
 from config.settings import APP_NAME, APP_VERSION, SettingsStore, global_stylesheet
 from core.history_manager import HistoryManager
 from core.player_backend import PlayerBackend
-from ui.main_window import MainWindow
+from ui.player_window_manager import PlayerWindowManager
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -74,11 +93,18 @@ def main(argv: list[str] | None = None) -> int:
     """Start Comet Player."""
     args = parse_args(argv or sys.argv[1:])
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
+    settings = SettingsStore()
+    settings.load()
+    QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
     surface_format = QSurfaceFormat()
     surface_format.setRenderableType(QSurfaceFormat.RenderableType.OpenGL)
     surface_format.setVersion(3, 3)
     surface_format.setProfile(QSurfaceFormat.OpenGLContextProfile.CoreProfile)
     surface_format.setSwapInterval(1)
+    if settings.get("video.color_space", "srgb") == "display-p3":
+        surface_format.setColorSpace(QColorSpace(QColorSpace.NamedColorSpace.DisplayP3))
+    else:
+        surface_format.setColorSpace(QColorSpace(QColorSpace.NamedColorSpace.SRgb))
     QSurfaceFormat.setDefaultFormat(surface_format)
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
@@ -88,12 +114,13 @@ def main(argv: list[str] | None = None) -> int:
     if not PlayerBackend.mpv_dll_exists(CURRENT_DIR):
         show_mpv_missing_dialog()
         return 1
-    settings = SettingsStore()
-    settings.load()
     history = HistoryManager()
     startup_files = normalize_startup_files(args.files)
-    window = MainWindow(settings, history, startup_files, args.url)
-    window.show()
+    window_manager = PlayerWindowManager(settings, history)
+    # QApplication does not own ordinary top-level Python wrappers. Keep the
+    # lifecycle manager reachable for as long as the event loop is running.
+    app.player_window_manager = window_manager  # type: ignore[attr-defined]
+    window_manager.create_window(startup_files, args.url)
     return app.exec()
 
 

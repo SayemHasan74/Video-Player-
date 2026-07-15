@@ -30,9 +30,16 @@ def probe_media(source: str) -> dict:
     if not ffprobe: return {}
     command = [ffprobe, "-v", "error", "-show_format", "-show_streams", "-show_chapters", "-of", "json", str(path)]
     try:
-        result = subprocess.run(command, capture_output=True, text=True, timeout=20, creationflags=0x08000000)
-        return json.loads(result.stdout) if result.returncode == 0 else {}
-    except (OSError, subprocess.SubprocessError, json.JSONDecodeError):
+        # ffprobe writes UTF-8 JSON regardless of the Windows ANSI code page.
+        # Letting subprocess use text=True can therefore crash its reader
+        # thread on paths/tags containing emoji or other non-CP1252 text.
+        result = subprocess.run(command, capture_output=True, timeout=20, creationflags=0x08000000)
+        if result.returncode != 0 or not result.stdout:
+            return {}
+        payload = result.stdout.decode("utf-8", errors="replace") if isinstance(result.stdout, bytes) else str(result.stdout)
+        parsed = json.loads(payload)
+        return parsed if isinstance(parsed, dict) else {}
+    except (OSError, subprocess.SubprocessError, json.JSONDecodeError, TypeError, UnicodeError):
         return {}
 
 

@@ -32,6 +32,9 @@ MEDIA_EXTENSIONS: frozenset[str] = frozenset(
         ".ape",
         ".asf",
         ".avi",
+        ".dff",
+        ".dsd",
+        ".dsf",
         ".flac",
         ".flv",
         ".m2ts",
@@ -49,6 +52,7 @@ MEDIA_EXTENSIONS: frozenset[str] = frozenset(
         ".wav",
         ".webm",
         ".wmv",
+        ".wma",
     }
 )
 SUBTITLE_EXTENSIONS: frozenset[str] = frozenset({".ass", ".srt", ".ssa", ".sub", ".vtt"})
@@ -73,6 +77,11 @@ def default_settings() -> dict[str, Any]:
                 "y": None,
                 "maximized": False,
                 "always_on_top": False,
+                "screen_name": "",
+                "screen_offset_x": None,
+                "screen_offset_y": None,
+                "drag_from_video": False,
+                "minimize_to_pip_video": False,
             },
             "playback": {
                 "volume": 80,
@@ -81,6 +90,8 @@ def default_settings() -> dict[str, Any]:
                 "remember_position": True,
                 "cover_mode": False,
                 "open_behavior": "replace",
+                "open_single_behavior": "replace",
+                "open_multiple_behavior": "replace",
                 "auto_resize": True,
                 "auto_music_mode": True,
                 "audio_only_override": False,
@@ -93,21 +104,63 @@ def default_settings() -> dict[str, Any]:
                 "hide_controls_while_playing": True,
                 "osc_position": "floating",
                 "osc_hide_delay_ms": 3000,
-                "osc_toolbar": ["playlist", "subtitle", "audio", "screenshot", "pip", "music", "fullscreen"],
+                "osc_always_visible": False,
+                "osc_scroll_enabled": True,
+                "video_scroll_enabled": True,
+                "osc_floating_offset": 0,
+                "osc_toolbar": ["playlist", "subtitle", "audio", "screenshot", "ab_loop", "pip", "music", "cover", "fullscreen"],
                 "sidebar_side": "right",
                 "sidebar_width": 320,
+                "quick_settings_width": 320,
                 "sidebar_tab": "playlist",
+                "playlist_pinned": False,
+                "quick_settings_pinned": False,
                 "show_playlist": False,
                 "show_osd": True,
+                "osd_position": "top",
+                "osd_suppressed_categories": "",
+                "buffering_throbber": "spinner",
                 "animations": True,
                 "theme": "dark",
             },
-            "music_mode": {"show_playlist": False, "show_album_art": True},
-            "video": {"hwdec": "auto-safe", "aspect": "auto", "rotation": 0},
-            "audio": {"device": "auto", "gapless": False},
+            "music_mode": {
+                "show_playlist": False,
+                "show_album_art": True,
+            },
+            "playlist": {
+                "repeat_one": False,
+                "repeat_all": False,
+                "shuffle": False,
+            },
+            "video": {
+                "hwdec": "auto-safe",
+                "hwdec_fallback": True,
+                "aspect": "auto",
+                "rotation": 0,
+                "lock_resize_aspect": True,
+                "color_space": "srgb",
+                "hdr_mode": "auto",
+                "tone_mapping": "auto",
+                "gamut_mapping": "auto",
+                "hdr_peak_detection": "auto",
+                "icc_profile": "",
+            },
+            "pip": {"x": None, "y": None, "width": 360, "height": 210},
+            "audio": {
+                "device": "auto",
+                "gapless": "weak",
+                "replaygain": "no",
+                "replaygain_preamp": 0.0,
+                "replaygain_clip": False,
+                "replaygain_fallback": 0.0,
+                "languages": "",
+                "media_keys": True,
+                "dsd_decode": "pcm",
+            },
             "subtitle": {
                 "autoload": True, "encoding": "auto", "font": "Segoe UI",
                 "size": 42, "color": "#ffffff", "outline": 2, "position": 100,
+                "exclude_embedded_auto": False,
             },
             "network": {
                 "preferred_format": "bestvideo+bestaudio/best",
@@ -115,7 +168,13 @@ def default_settings() -> dict[str, Any]:
                 "user_agent": "",
             },
             "thumbnails": {"enabled": True, "samples": 100, "cache_mb": 512},
-            "startup": {"show_welcome": True, "reopen_last": False, "last_source": ""},
+            "startup": {
+                "show_welcome": True,
+                "reopen_last": False,
+                "last_source": "",
+                "show_playlist_recents": False,
+                "playlist_recents": [],
+            },
             "advanced": {"mpv_options": ""},
             "keys": {"profile": "Default"},
         }
@@ -135,6 +194,19 @@ class SettingsStore:
             if self.path.exists():
                 raw = json.loads(self.path.read_text(encoding="utf-8"))
                 self.data = self._merge(default_settings(), raw)
+                # Migrate the original single opening preference without
+                # changing an existing user's behavior.  New installs can
+                # configure single and multiple selections independently.
+                raw_playback = raw.get("playback", {}) if isinstance(raw, dict) else {}
+                if isinstance(raw_playback, dict) and "open_behavior" in raw_playback:
+                    previous = str(raw_playback.get("open_behavior", "replace"))
+                    if "open_single_behavior" not in raw_playback:
+                        self.set("playback.open_single_behavior", previous)
+                    if "open_multiple_behavior" not in raw_playback:
+                        self.set("playback.open_multiple_behavior", previous)
+                gapless = self.get("audio.gapless", "weak")
+                if isinstance(gapless, bool):
+                    self.set("audio.gapless", "yes" if gapless else "no")
             else:
                 self.save()
         except (OSError, json.JSONDecodeError, TypeError) as exc:

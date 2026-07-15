@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from enum import Enum, auto
 from typing import Any
 
-from PyQt6.QtCore import QObject, QRect, Qt, pyqtSignal
+from PyQt6.QtCore import QObject, QRect, pyqtSignal
 
 from config.settings import CONTROL_BAR_HEIGHT, MIN_WINDOW_SIZE, TITLE_BAR_HEIGHT
 
@@ -67,6 +67,8 @@ class WindowModeController(QObject):
     def enter_compact(self) -> None:
         if self.transitioning or self.is_compact:
             return
+        if self.is_pip:
+            self.exit_pip()
         self._begin()
         try:
             self.sync_from_window()
@@ -76,14 +78,21 @@ class WindowModeController(QObject):
             self._hide_playlist()
             if self.window.isFullScreen() or self.window.isMaximized():
                 self.window.showNormal()
-            compact_height = TITLE_BAR_HEIGHT + APP_MENU_HEIGHT + CONTROL_BAR_HEIGHT
+            music_mode = getattr(self.window, "music_mode", None)
+            if music_mode is not None:
+                music_mode.enter_layout()
+            compact_height = (
+                music_mode.target_height()
+                if music_mode is not None
+                else TITLE_BAR_HEIGHT + APP_MENU_HEIGHT + CONTROL_BAR_HEIGHT
+            )
             self.window.setMaximumHeight(16777215)
-            self.window.setMinimumSize(420, compact_height)
+            self.window.setMinimumSize(520 if music_mode is not None else 420, compact_height)
             self.window.setMaximumHeight(compact_height)
             self.window.setGeometry(
                 previous.left(),
                 previous.top(),
-                max(420, previous.width()),
+                max(520 if music_mode is not None else 420, previous.width()),
                 compact_height,
             )
             self.window.control_bar.set_fullscreen(False)
@@ -100,6 +109,9 @@ class WindowModeController(QObject):
             snapshot = self.compact_snapshot or WindowSnapshot(
                 WindowMode.NORMAL, QRect(self.window.geometry()), False, True
             )
+            music_mode = getattr(self.window, "music_mode", None)
+            if music_mode is not None:
+                music_mode.exit_layout()
             self.window.setMaximumHeight(16777215)
             self.window.setMinimumSize(*MIN_WINDOW_SIZE)
             self.mode = snapshot.mode
@@ -112,33 +124,45 @@ class WindowModeController(QObject):
     def toggle_fullscreen(self) -> None:
         if self.transitioning:
             return
+        if self.is_pip:
+            self.exit_pip()
         if self.is_compact:
             self.exit_compact()
         self._begin()
-        try:
-            if self.mode is WindowMode.FULLSCREEN or self.window.isFullScreen():
-                snapshot = self.fullscreen_snapshot or WindowSnapshot(
-                    WindowMode.NORMAL, QRect(self.window.normalGeometry()), False, True
-                )
-                self.mode = snapshot.mode
+        if self.mode is WindowMode.FULLSCREEN or self.window.isFullScreen():
+            snapshot = self.fullscreen_snapshot or WindowSnapshot(
+                WindowMode.NORMAL, QRect(self.window.normalGeometry()), False, True
+            )
+            self.mode = snapshot.mode
+
+            def change() -> None:
                 self._restore_native_state(snapshot)
                 self._restore_ui(snapshot)
                 self.fullscreen_snapshot = None
-            else:
-                self.sync_from_window()
-                self.fullscreen_snapshot = self._snapshot()
-                self.mode = WindowMode.FULLSCREEN
-                self._hide_playlist()
+        else:
+            self.sync_from_window()
+            self.fullscreen_snapshot = self._snapshot()
+            self.mode = WindowMode.FULLSCREEN
+            self._hide_playlist()
+
+            def change() -> None:
                 self.window.showFullScreen()
                 self.window.control_bar.set_fullscreen(True)
                 self.window._chrome_visible = True
                 self.window._apply_mode_layout()
-        finally:
+
+        animate = getattr(self.window, "_animate_fullscreen_change", None)
+        if callable(animate):
+            animate(change, self._finish)
+        else:
+            change()
             self._finish()
 
     def toggle_maximized(self) -> None:
         if self.transitioning:
             return
+        if self.is_pip:
+            self.exit_pip()
         if self.is_compact:
             self.exit_compact()
         self._begin()
@@ -165,6 +189,9 @@ class WindowModeController(QObject):
     def enter_pip(self) -> None:
         if self.transitioning or self.is_pip:
             return
+        pip_window = getattr(self.window, "pip_window", None)
+        if pip_window is None:
+            return
         if self.is_compact:
             self.exit_compact()
         self._begin()
@@ -173,13 +200,9 @@ class WindowModeController(QObject):
             self.pip_snapshot = self._snapshot()
             self.mode = WindowMode.PIP
             self._hide_playlist()
-            self.window.setMinimumSize(240, 140)
-            self.window.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
-            screen = self.window.screen()
-            available = screen.availableGeometry() if screen is not None else QRect(0, 0, 1280, 720)
-            self.window.showNormal()
-            self.window.setGeometry(available.right() - 380, available.bottom() - 230, 360, 210)
-            self.window._apply_mode_layout()
+            pip_window.attach_video(self.window.video)
+            self.window.hide()
+            pip_window.show_for_screen(self.window.screen())
         finally:
             self._finish()
 
@@ -191,14 +214,16 @@ class WindowModeController(QObject):
             snapshot = self.pip_snapshot or WindowSnapshot(
                 WindowMode.NORMAL, QRect(self.window.normalGeometry()), False, True
             )
-            self.window.setMinimumSize(*MIN_WINDOW_SIZE)
-            self.window.setWindowFlag(
-                Qt.WindowType.WindowStaysOnTopHint,
-                bool(self.window.settings.get("window.always_on_top", False)),
-            )
+            pip_window = self.window.pip_window
+            pip_window.save_geometry()
+            pip_window.detach_video(self.window.central_shell)
+            pip_window.hide()
             self.mode = snapshot.mode
             self._restore_native_state(snapshot)
             self._restore_ui(snapshot)
+            self.window.video.show()
+            self.window.raise_()
+            self.window.activateWindow()
             self.pip_snapshot = None
         finally:
             self._finish()
@@ -209,7 +234,11 @@ class WindowModeController(QObject):
 
     def _finish(self) -> None:
         self.transitioning = False
-        self.window._position_overlays()
+        if not self.is_pip:
+            self.window._position_overlays()
+        video = getattr(self.window, "video", None)
+        if video is not None and hasattr(video, "ensure_renderer"):
+            video.ensure_renderer()
         self.modeChanged.emit(self.mode)
 
     def _snapshot(self) -> WindowSnapshot:
@@ -218,7 +247,7 @@ class WindowModeController(QObject):
         return WindowSnapshot(
             mode=native_mode,
             geometry=QRect(geometry),
-            playlist_visible=self.window.playlist_panel.isVisible(),
+            playlist_visible=(self.window.sidebars.playlist_open if hasattr(self.window, "sidebars") else self.window.playlist_panel.isVisible()),
             chrome_visible=bool(self.window._chrome_visible),
         )
 
@@ -230,7 +259,10 @@ class WindowModeController(QObject):
         return WindowMode.NORMAL
 
     def _hide_playlist(self) -> None:
-        self.window.playlist_panel.hide()
+        if hasattr(self.window, "sidebars"):
+            self.window.sidebars.set_playlist_visible(False, animate=False, persist=False)
+        else:
+            self.window.playlist_panel.hide()
         self.window.control_bar.set_playlist_visible(False)
 
     def _restore_native_state(self, snapshot: WindowSnapshot) -> None:
@@ -253,7 +285,9 @@ class WindowModeController(QObject):
 
     def _restore_ui(self, snapshot: WindowSnapshot) -> None:
         self.window._chrome_visible = snapshot.chrome_visible
-        if snapshot.playlist_visible:
+        if hasattr(self.window, "sidebars"):
+            self.window.sidebars.set_playlist_visible(snapshot.playlist_visible, animate=False, persist=False)
+        elif snapshot.playlist_visible:
             self.window.playlist_panel.show()
             self.window.control_bar.set_playlist_visible(True)
         else:

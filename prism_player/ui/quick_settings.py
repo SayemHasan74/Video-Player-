@@ -248,6 +248,8 @@ class QuickSettingsPanel(QTabWidget):
         self.audio_tracks.selected.connect(lambda track_id: self._emit("aid", track_id))
         form.addRow("Track", self.audio_tracks)
         form.addRow("Delay", self._slider(-10, 10, 0, "audio-delay", 2))
+        form.addRow("ReplayGain", self._combo(["no", "track", "album"], "replaygain"))
+        form.addRow("Gapless", self._combo(["no", "weak", "yes"], "gapless-audio"))
         volume = self._slider(0, 150, 80, "volume", 0)
         volume.setToolTip("Values above 100% can clip or distort audio.")
         form.addRow("Volume boost", volume)

@@ -27,6 +27,7 @@ PATHS: dict[str, str] = {
     "cover": '<path d="M4 6h16v12H4V6Zm2 2v8h12V8H6Zm2 1h8v6H8V9Z"/>',
     "subtitle": '<path d="M4 6h16v12H4V6Zm2 2v8h12V8H6Zm1 5h5v1.5H7V13Zm6 0h4v1.5h-4V13Z"/>',
     "audio_track": '<path d="M9 18a3 3 0 1 1 0-6c.7 0 1.4.2 2 .7V5h8v3h-6v10h-2v-1.1c-.5.7-1.2 1.1-2 1.1Z"/>',
+    "music_mode": '<path d="M8 19a3 3 0 1 1 0-6c.7 0 1.4.2 2 .7V6l9-2v11.7A3 3 0 1 1 17 13V8l-5 1.1V16a4 4 0 1 1-4-4V6Z"/>',
     "screenshot": '<path d="M8 6 9.5 4h5L16 6h4v13H4V6h4Zm4 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z"/>',
     "ab_loop": '<path d="M5 7h5v2H7v6h3v2H5V7Zm9 0h5v10h-5v-2h3V9h-3V7ZM9 12h6v2H9v-2Z"/>',
     "folder": '<path d="M3 6h7l2 2h9v10H3V6Z"/>',

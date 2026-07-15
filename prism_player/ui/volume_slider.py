@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import QEvent, Qt, pyqtSignal
 from PyQt6.QtGui import QWheelEvent
 from PyQt6.QtWidgets import QHBoxLayout, QPushButton, QWidget
 
@@ -32,6 +32,8 @@ class VolumeWidget(QWidget):
         self.slider.setRange(0, 150)
         self.slider.setValue(80)
         self.slider.setFixedWidth(92)
+        self.slider.installEventFilter(self)
+        self._scroll_enabled = True
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
@@ -47,6 +49,22 @@ class VolumeWidget(QWidget):
         self.slider.blockSignals(False)
         self.button.setIcon(svg_icon("mute" if muted or volume <= 0 else "volume"))
 
+    def set_scroll_enabled(self, enabled: bool) -> None:
+        self._scroll_enabled = bool(enabled)
+
+    def eventFilter(self, watched: object, event: object) -> bool:
+        if watched is self.slider and event.type() == QEvent.Type.Wheel:
+            if not self._scroll_enabled:
+                event.ignore()
+                return True
+            self.wheelAdjusted.emit(5 if event.angleDelta().y() > 0 else -5)
+            event.accept()
+            return True
+        return super().eventFilter(watched, event)
+
     def wheelEvent(self, event: QWheelEvent) -> None:
+        if not self._scroll_enabled:
+            event.ignore()
+            return
         self.wheelAdjusted.emit(5 if event.angleDelta().y() > 0 else -5)
         event.accept()

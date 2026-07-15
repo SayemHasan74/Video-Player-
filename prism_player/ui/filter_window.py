@@ -8,6 +8,7 @@ from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QKeySequence
 from PyQt6.QtWidgets import (
     QComboBox,
+    QAbstractItemView,
     QDialog,
     QDoubleSpinBox,
     QFormLayout,
@@ -22,17 +23,20 @@ from PyQt6.QtWidgets import (
     QKeySequenceEdit,
     QDialogButtonBox,
     QSpinBox,
+    QSlider,
     QVBoxLayout,
     QWidget,
 )
 
 from core.filter_store import FilterStore
+from core.keybindings import KeyBindingStore
+from ui.keybindings_editor import ShortcutCapture
 
 
 PRESETS: dict[str, list[tuple[str, str, Any]]] = {
     "crop": [("w", "int", (1, 16384, 1)), ("h", "int", (1, 16384, 1)), ("x", "int", (0, 16384, 1)), ("y", "int", (0, 16384, 1))],
     "expand": [("w", "int", (1, 16384, 1)), ("h", "int", (1, 16384, 1)), ("x", "int", (0, 16384, 1)), ("y", "int", (0, 16384, 1)), ("aspect", "text", ""), ("round", "int", (1, 128, 1))],
-    "sharpen": [("amount", "float", (-2.0, 5.0, 0.1)), ("matrix", "choose", [3, 5, 7])],
+    "sharpen": [("amount", "float", (0.1, 5.0, 0.1)), ("matrix", "choose", [3, 5, 7])],
     "blur": [("amount", "float", (0.1, 5.0, 0.1)), ("matrix", "choose", [3, 5, 7])],
     "delogo": [("x", "int", (0, 16384, 1)), ("y", "int", (0, 16384, 1)), ("w", "int", (1, 16384, 1)), ("h", "int", (1, 16384, 1))],
     "negative": [],
@@ -42,6 +46,31 @@ PRESETS: dict[str, list[tuple[str, str, Any]]] = {
     "custom mpv": [("raw", "text", "")],
     "custom lavfi": [("raw", "text", "")],
 }
+
+
+class FloatParameter(QWidget):
+    """Synchronized slider and decimal editor for generated float fields."""
+
+    def __init__(self, minimum: float, maximum: float, step: float) -> None:
+        super().__init__()
+        self.step = float(step)
+        self.editor = QDoubleSpinBox()
+        self.editor.setRange(float(minimum), float(maximum))
+        self.editor.setSingleStep(self.step)
+        self.editor.setDecimals(max(2, len(str(step).partition(".")[2])))
+        self.slider = QSlider(Qt.Orientation.Horizontal)
+        self.slider.setRange(0, round((maximum - minimum) / self.step))
+        self.slider.valueChanged.connect(
+            lambda value: self.editor.setValue(float(minimum) + value * self.step)
+        )
+        self.editor.valueChanged.connect(
+            lambda value: self.slider.setValue(round((value - float(minimum)) / self.step))
+        )
+        layout = QHBoxLayout(self); layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.slider, 1); layout.addWidget(self.editor)
+
+    def value(self) -> float:
+        return self.editor.value()
 
 
 class FiltersWindow(QDialog):
@@ -64,6 +93,11 @@ class FiltersWindow(QDialog):
         self.parameter_form = QFormLayout(self.parameter_widget)
         self.active = QListWidget()
         self.saved = QListWidget()
+        for listing in (self.active, self.saved):
+            listing.setTextElideMode(Qt.TextElideMode.ElideNone)
+            listing.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+            listing.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+            listing.setWordWrap(False)
         self.saved.itemChanged.connect(self._saved_toggled)
         add = QPushButton("Add filter")
         remove = QPushButton("Remove active")
@@ -106,6 +140,7 @@ class FiltersWindow(QDialog):
             for entry in filters:
                 value = self._filter_text(entry)
                 item = QListWidgetItem(f"{kind.title()}  •  {value}")
+                item.setToolTip(value)
                 remove_value = f"@{entry.get('label')}" if isinstance(entry, dict) and entry.get("label") else value
                 item.setData(Qt.ItemDataRole.UserRole, {"kind": kind, "value": value, "remove": remove_value})
                 self.active.addItem(item)
@@ -150,10 +185,7 @@ class FiltersWindow(QDialog):
                 widget.setRange(options[0], options[1])
                 widget.setSingleStep(options[2])
             elif kind == "float":
-                widget = QDoubleSpinBox()
-                widget.setRange(options[0], options[1])
-                widget.setSingleStep(options[2])
-                widget.setDecimals(2)
+                widget = FloatParameter(options[0], options[1], options[2])
             elif kind == "choose":
                 widget = QComboBox()
                 widget.addItems([str(value) for value in options])
@@ -165,7 +197,7 @@ class FiltersWindow(QDialog):
     def _values(self) -> dict[str, Any]:
         values: dict[str, Any] = {}
         for name, widget in self.parameters.items():
-            if isinstance(widget, (QSpinBox, QDoubleSpinBox)):
+            if isinstance(widget, (QSpinBox, QDoubleSpinBox, FloatParameter)):
                 values[name] = widget.value()
             elif isinstance(widget, QComboBox):
                 values[name] = widget.currentText()
@@ -191,7 +223,8 @@ class FiltersWindow(QDialog):
         if name == "delogo":
             return f"lavfi=[delogo=x={values['x']}:y={values['y']}:w={values['w']}:h={values['h']}]"
         if name == "lut3d":
-            return f"lavfi=[lut3d=file='{values['file']}':interp={values['interpolation']}]"
+            path = str(values["file"]).replace("\\", "\\\\").replace("'", "\\'")
+            return f"lavfi=[lut3d=file='{path}':interp={values['interpolation']}]"
         positional = ":".join(str(values[key]) for key in ("w", "h", "x", "y") if key in values)
         extras = ":".join(f"{key}={value}" for key, value in values.items() if key not in {"w", "h", "x", "y"} and value != "")
         return f"{name}={positional}{':' if positional and extras else ''}{extras}" if values else name
@@ -221,6 +254,8 @@ class FiltersWindow(QDialog):
             return
         shortcut, accepted = self._capture_shortcut()
         if not accepted:
+            return
+        if self._shortcut_conflict(shortcut):
             return
         self.presets.append({"name": name.strip(), "kind": data["kind"], "value": data["value"], "shortcut": shortcut, "enabled": True})
         self._persist()
@@ -264,13 +299,15 @@ class FiltersWindow(QDialog):
         shortcut, ok = self._capture_shortcut(preset.get("shortcut", ""))
         if not ok:
             return
+        if self._shortcut_conflict(shortcut, index):
+            return
         preset.update(name=name.strip(), value=value.strip(), shortcut=shortcut.strip())
         self._persist()
 
     def _capture_shortcut(self, initial: str = "") -> tuple[str, bool]:
         dialog = QDialog(self)
         dialog.setWindowTitle("Filter Shortcut")
-        capture = QKeySequenceEdit(QKeySequence(initial))
+        capture = ShortcutCapture(QKeySequence(initial))
         capture.setClearButtonEnabled(True)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(dialog.accept)
@@ -281,6 +318,37 @@ class FiltersWindow(QDialog):
         layout.addWidget(buttons)
         accepted = dialog.exec() == QDialog.DialogCode.Accepted
         return capture.keySequence().toString(QKeySequence.SequenceFormat.PortableText), accepted
+
+    def _shortcut_conflict(self, shortcut: str, exclude_index: int = -1) -> bool:
+        shortcut = QKeySequence(shortcut).toString(
+            QKeySequence.SequenceFormat.PortableText
+        ).strip()
+        if not shortcut:
+            return False
+        for index, preset in enumerate(self.presets):
+            existing = QKeySequence(str(preset.get("shortcut") or "")).toString(
+                QKeySequence.SequenceFormat.PortableText
+            )
+            if index != exclude_index and existing.casefold() == shortcut.casefold():
+                QMessageBox.warning(
+                    self, "Shortcut Conflict", f"{shortcut} is already used by {preset['name']}."
+                )
+                return True
+        parent = self.parentWidget()
+        settings = getattr(parent, "settings", None)
+        profile = str(settings.get("keys.profile", "Default")) if settings is not None else "Default"
+        parent_store = getattr(parent, "key_store", None)
+        bindings = (parent_store or KeyBindingStore()).load(profile)
+        used_shortcuts = {
+            QKeySequence(value).toString(QKeySequence.SequenceFormat.PortableText).casefold()
+            for value in bindings
+        }
+        if shortcut.casefold() in used_shortcuts:
+            QMessageBox.warning(
+                self, "Shortcut Conflict", f"{shortcut} is already used by the active key-binding profile."
+            )
+            return True
+        return False
 
     def _delete_saved(self) -> None:
         item = self.saved.currentItem()

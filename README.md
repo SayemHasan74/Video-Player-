@@ -59,16 +59,20 @@ python main.py
 - Structured live media inspector with arbitrary mpv property watch
 - Searchable playback history with queued background writes
 - Recent-media welcome window with file/URL drag-and-drop
+- Cached media thumbnails in Welcome/History, full-window Welcome drops, and reduced-motion-aware History refreshes
 - Incremental, validated thumbnail previews with bounded disk caching
 - Searchable nine-section preferences and editable named key-binding profiles
 - Shared application and right-click action menus
+- One action registry shared by menus, context menus, shortcuts, OSC, Music Mode, PiP, and Windows media controls
+- Independent single-file and multiple-file opening policies, with in-process multi-window player sessions
+- Searchable key bindings with Default/IINA-style/mpv-style/VLC-style profiles and renamable custom profiles
 - Online subtitle finder that opens targeted subtitle searches and loads downloaded subtitle files
 - External subtitle loading
 - Fit or cover-screen video mode for fullscreen playback
 - A-B loop controls
 - Playback speed cycling
 - Screenshots saved as `CometPlayer_YYYYMMDD_HHMMSS.png`
-- In-window compact and picture-in-picture modes with exact state restoration
+- Compact music mode plus an independent always-on-top PiP window that reuses the active video surface without reloading playback
 - Drag-and-drop files, folders, and URLs
 - Always-on-top toggle
 - Local Python plugins with isolated lifecycle, event listeners, preferences, player/playlist APIs, menu actions, and sidebar tabs
@@ -96,14 +100,29 @@ python main.py
 | Period | Next item |
 | Comma | Previous item |
 
+Manual window resizing preserves the active video's aspect ratio. Hold **Alt** while dragging a window edge or corner to temporarily resize freely. Empty-video-area window dragging and video-area scroll actions are separate preferences under **UI**.
+
+File opening uses the separate single-file and multiple-file actions selected in **Preferences → General**. Hold **Alt** while opening or dropping media to temporarily invert current-window/new-window behavior, or hold **Shift** to queue it in the current playlist. Explicit **Play in New Window** commands always create an independent player session.
+
 ## Window and rendering architecture
 
 - libmpv renders through `MpvRenderContext` into one Qt-owned `QOpenGLWidget`.
+- DLL discovery is bootstrapped before Qt or any application module can import `python-mpv`.
+- Render updates cross into Qt through a queued signal; framebuffer dimensions use physical device pixels, and GL destruction/recovery is explicit across fullscreen, Music Mode, and PiP.
+- The default color path safely converts into the configured sRGB or Display-P3 Qt surface. HDR passthrough is opt-in because Windows, the compositor, display, and GPU must all support it.
 - Title, menu, controls, OSD, and playlist are ordinary child overlays in the same Qt tree.
 - `WindowModeController` owns normal, maximized, fullscreen, compact, and PiP transitions.
 - `OverlayController` owns chrome animation and overlay geometry.
 - `PlayerInputController` owns application shortcuts, middle-click compact mode, and playlist outside-click behavior.
 - No native mpv child window, global native mouse hook, or delayed geometry correction is used.
+
+## Audio and Windows integration
+
+- ReplayGain supports off, track, and album modes with preamp, clipping, and fallback controls.
+- Gapless `weak`/`yes` modes pre-queue the next local audio track inside mpv and adopt the transition without reloading it.
+- Audio devices are selected using mpv's `audio-device-list` IDs, with a safe system-default fallback.
+- Signed audio delay, normalized ISO language preferences, and DSD/DSF decoding to high-quality PCM are supported.
+- Windows SMTC publishes title, artist, album, artwork, and playback state when `winsdk` is available. Qt media-key handling remains the fallback.
 
 ## Plugins
 
@@ -128,6 +147,17 @@ def setup(api):
 ```
 
 Use **Plugins → Manage Plugins** to discover, enable, disable, and reload extensions. Plugins are trusted local Python code; enable only plugins you trust. Each plugin gets its own JSON preference file and all of its registrations are removed when it is disabled.
+
+The plugin API includes `core`, `events`, `menu`, `playlist`, `sidebar`, transparent rich-text `overlay`, prioritized `input`, declarative `preferences`, sandboxed `files`, controlled `process`, and in-app `logging` namespaces. **Manage Plugins → User Script…** saves and runs quick snippets without packaging. Plugin failures are isolated and shown in the manager's Logs tab.
+
+Plugin development CLI examples:
+
+```powershell
+python prism_player/plugin_cli.py create "My Plugin" --id my.plugin
+python prism_player/plugin_cli.py validate .\my.plugin
+python prism_player/plugin_cli.py build .\my.plugin
+python prism_player/plugin_cli.py run .\my.plugin
+```
 
 Run the regression suite from the workspace root:
 

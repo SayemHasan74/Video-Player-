@@ -17,6 +17,19 @@ BUILTIN_PROFILES: dict[str, dict[str, str]] = {
         "S": "screenshot", "Ctrl+O": "open_file", "Ctrl+U": "open_url",
         ".": "next", ",": "previous", "Ctrl+M": "music_mode",
     },
+    "IINA-style": {
+        "Space": "play_pause", "Left": "seek_backward", "Right": "seek_forward",
+        "Up": "volume_up", "Down": "volume_down", "M": "mute", "F": "fullscreen",
+        "Escape": "exit_fullscreen", "P": "playlist", "T": "always_on_top",
+        "S": "screenshot", "Ctrl+O": "open_file", "Ctrl+U": "open_url",
+        ".": "next", ",": "previous", "Ctrl+M": "music_mode",
+    },
+    "mpv-style": {
+        "Space": "play_pause", "Left": "seek_backward", "Right": "seek_forward",
+        "9": "volume_down", "0": "volume_up", "M": "mute", "F": "fullscreen",
+        "Escape": "exit_fullscreen", "P": "playlist", "S": "screenshot",
+        "Ctrl+O": "open_file", "Ctrl+U": "open_url", ">": "next", "<": "previous",
+    },
     "VLC-style": {
         "Space": "play_pause", "Left": "seek_backward", "Right": "seek_forward",
         "Up": "volume_up", "Down": "volume_down", "M": "mute", "F": "fullscreen",
@@ -70,6 +83,18 @@ class KeyBindingStore:
         if name in BUILTIN_PROFILES:
             raise ValueError("Built-in profiles are read-only")
         self._profile_path(name).unlink(missing_ok=True)
+
+    def rename(self, source: str, target: str) -> None:
+        """Rename a custom profile without ever overwriting another one."""
+        if source in BUILTIN_PROFILES:
+            raise ValueError("Built-in profiles are read-only")
+        source_path = self._profile_path(source)
+        target_path = self._profile_path(target)
+        if target in BUILTIN_PROFILES or target_path.exists():
+            raise ValueError("A profile with that name already exists")
+        if not source_path.exists():
+            raise ValueError("Profile does not exist")
+        source_path.replace(target_path)
 
     def _profile_path(self, name: str) -> Path:
         name = name.strip()

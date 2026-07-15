@@ -3,3 +3,4 @@ python-mpv==1.0.7
 yt-dlp
 requests
 mutagen
+winsdk; platform_system == "Windows"

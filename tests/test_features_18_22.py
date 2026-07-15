@@ -43,7 +43,7 @@ class _Host(QObject):
     def __init__(self) -> None:
         super().__init__()
         self.player = _Player()
-        self.osd = SimpleNamespace(show_message=lambda *_args: None)
+        self.osd = SimpleNamespace(show_message=lambda *_args, **_kwargs: None)
         self.played: list[int] = []
 
     def plugin_player_status(self): return {"paused": False}
@@ -130,9 +130,13 @@ def setup(api):
     def test_final_behavior_hooks_are_wired_without_removing_personal_controls(self) -> None:
         main_source = (PACKAGE / "ui" / "main_window.py").read_text(encoding="utf-8")
         input_source = (PACKAGE / "ui" / "input_controller.py").read_text(encoding="utf-8")
-        self.assertIn("self.control_bar.seekRequested.connect(self._seek_from_ui)", main_source)
-        self.assertIn("self.media_states.update(current.source, rotation=value)", main_source)
-        self.assertIn("self._open_url_in_new_window(url)", main_source)
+        playback_source = (PACKAGE / "ui" / "playback_event_router.py").read_text(encoding="utf-8")
+        media_state_source = (PACKAGE / "ui" / "media_state_controller.py").read_text(encoding="utf-8")
+        media_open_source = (PACKAGE / "ui" / "media_open_controller.py").read_text(encoding="utf-8")
+        self.assertIn("self.playback_events.connect_all()", main_source)
+        self.assertIn("self._connect(control.seekRequested, self.seek_from_ui)", playback_source)
+        self.assertIn("window.media_states.update(current.source, rotation=value)", media_state_source)
+        self.assertIn("self.open_url_in_new_window(url)", media_open_source)
         self.assertIn("window._note_user_activity()", input_source)
         self.assertIn("window._pause_and_minimize()", input_source)
         self.assertIn("window._toggle_mini_mode()", input_source)
