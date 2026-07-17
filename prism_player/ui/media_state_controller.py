@@ -6,6 +6,17 @@ from typing import Any
 
 from PyQt6.QtCore import QObject, QRect
 
+from core.mpv_properties import (
+    AID,
+    AUDIO_DELAY,
+    GAPLESS_AUDIO,
+    SECONDARY_SID,
+    SID,
+    VIDEO_ASPECT_OVERRIDE,
+    VIDEO_PARAMS,
+    VIDEO_ROTATE,
+)
+
 
 class MediaStateController(QObject):
     def __init__(self, window: Any) -> None:
@@ -33,28 +44,28 @@ class MediaStateController(QObject):
             )
             window.player.replace_filter("audio", "comet_eq", f"lavfi=[{filters}]" if filters else None)
             return
-        if key == "audio-delay":
+        if key == AUDIO_DELAY:
             window.player.set_audio_delay(float(value))
             window.osd.show_message(f"Audio delay: {float(value):+.2f}s", category="tracks")
             return
-        if key == "gapless-audio":
+        if key == GAPLESS_AUDIO:
             window.player.set_gapless_mode(str(value))
             return
-        if key == "video-rotate":
+        if key == VIDEO_ROTATE:
             value = int(value)
-        if key == "video-aspect-override" and value == "auto":
+        if key == VIDEO_ASPECT_OVERRIDE and value == "auto":
             value = "no"
         window.player.set_property(key, value)
-        if key in {"aid", "sid", "secondary-sid"}:
-            label = "Audio" if key == "aid" else "Secondary subtitle" if key == "secondary-sid" else "Subtitle"
+        if key in {AID, SID, SECONDARY_SID}:
+            label = "Audio" if key == AID else "Secondary subtitle" if key == SECONDARY_SID else "Subtitle"
             window.osd.show_message(f"{label} track changed", category="tracks")
-        if current is not None and key == "video-rotate":
+        if current is not None and key == VIDEO_ROTATE:
             window.media_states.update(current.source, rotation=value)
-        if current is not None and key == "video-aspect-override":
+        if current is not None and key == VIDEO_ASPECT_OVERRIDE:
             window.media_states.update(current.source, aspect=value)
-        if key == "video-rotate":
+        if key == VIDEO_ROTATE:
             window.osd.show_message(f"Rotation: {value}°", category="filters")
-        elif key == "video-aspect-override":
+        elif key == VIDEO_ASPECT_OVERRIDE:
             window.osd.show_message(f"Aspect: {'Auto' if value == 'no' else value}", category="filters")
 
     def apply_for_source(self, source: str) -> None:
@@ -67,8 +78,8 @@ class MediaStateController(QObject):
         aspect = state.get("aspect", "no" if default_aspect == "auto" else default_aspect)
         rotation = int(state.get("rotation", window.settings.get("video.rotation", 0)) or 0)
         crop = state.get("crop")
-        window.player.set_property("video-aspect-override", aspect)
-        window.player.set_property("video-rotate", rotation)
+        window.player.set_property(VIDEO_ASPECT_OVERRIDE, aspect)
+        window.player.set_property(VIDEO_ROTATE, rotation)
         quick = window.playlist_panel.quick_settings
         if isinstance(crop, dict) and crop.get("w") and crop.get("h"):
             window.player.replace_filter(
@@ -82,7 +93,7 @@ class MediaStateController(QObject):
 
     def crop_selection_finished(self, selection: QRect) -> None:
         window = self.window
-        params = window.player.get_property("video-params", {}) or {}
+        params = window.player.get_property(VIDEO_PARAMS, {}) or {}
         source_width = int(params.get("w") or params.get("dw") or window.video.width())
         source_height = int(params.get("h") or params.get("dh") or window.video.height())
         if window.video.width() <= 0 or window.video.height() <= 0:

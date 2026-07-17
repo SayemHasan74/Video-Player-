@@ -80,12 +80,8 @@ class PipWindow(QWidget):
         if self._video is not None:
             self.video_layout.removeWidget(self._video)
         self._video = video
-        # AA_ShareOpenGLContexts keeps a QOpenGLWidget's context alive while
-        # it is re-parented between top-level windows.  Do not free libmpv's
-        # render context here: Qt therefore has no reason to call
-        # initializeGL() again, and the video would remain permanently black.
-        # On platforms where Qt does replace the GL context, VideoWidget's
-        # aboutToBeDestroyed handler performs the required teardown itself.
+        # The QWidget host moves as one unit; its native QWindow container and
+        # mpv render context remain internal and are not reparented directly.
         video.hide()
         video.setParent(self.video_host)
         self.video_layout.addWidget(video)

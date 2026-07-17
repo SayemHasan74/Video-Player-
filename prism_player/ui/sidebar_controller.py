@@ -9,6 +9,7 @@ from PyQt6.QtGui import QMouseEvent
 from PyQt6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from utils.accessibility import transitions_enabled
+from ui.osc_layout_constants import QUICK_SETTINGS_PANEL_WIDTH, SIDEBAR_MINIMUM_WIDTH
 
 
 class PinnedQuickSettingsDock(QFrame):
@@ -21,13 +22,13 @@ class PinnedQuickSettingsDock(QFrame):
         super().__init__(parent)
         self.setObjectName("pinnedQuickSettings")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self.setMinimumWidth(240)
+        self.setMinimumWidth(SIDEBAR_MINIMUM_WIDTH)
         self.setMaximumWidth(600)
         self.setMouseTracking(True)
         self._side = "left"
         self._resizing = False
         self._resize_start = QPoint()
-        self._resize_width = 320
+        self._resize_width = QUICK_SETTINGS_PANEL_WIDTH
         self._content: QWidget | None = None
         title = QLabel("Quick Settings")
         title.setStyleSheet("font-weight:600;color:#f0f0f0;")
@@ -108,6 +109,8 @@ class SidebarController(QObject):
         self.window = window
         self.quick_dock = PinnedQuickSettingsDock(window.central_shell)
         self.quick_dock.hide()
+        if hasattr(window, "native_overlays"):
+            window.native_overlays.register(self.quick_dock)
         self.playlist_open = False
         self.playlist_pinned = False
         self.quick_pinned = False
@@ -172,6 +175,8 @@ class SidebarController(QObject):
         if visible:
             self.window.playlist_panel.show()
             self.window.playlist_panel.raise_()
+            if hasattr(self.window, "native_overlays"):
+                self.window.native_overlays.raise_widget(self.window.playlist_panel)
         self._transition("playlist", 1.0 if visible else 0.0, animate)
 
     def set_playlist_pinned(self, pinned: bool) -> None:
@@ -194,6 +199,8 @@ class SidebarController(QObject):
             self.quick_dock.attach(quick)
             self.quick_dock.show()
             self.quick_dock.raise_()
+            if hasattr(self.window, "native_overlays"):
+                self.window.native_overlays.raise_widget(self.quick_dock)
         self._transition("quick", 1.0 if pinned else 0.0, animate)
 
     def set_playlist_width(self, width: int) -> None:
@@ -240,16 +247,15 @@ class SidebarController(QObject):
         base = self._base_rect
         side = "left" if str(window.settings.get("ui.sidebar_side", "right")) == "left" else "right"
         quick_side = "right" if side == "left" else "left"
-        playlist_width = min(600, max(240, int(window.settings.get("ui.sidebar_width", 320))))
-        quick_width = min(600, max(240, int(window.settings.get("ui.quick_settings_width", 320))))
+        playlist_width = min(600, max(SIDEBAR_MINIMUM_WIDTH, int(window.settings.get("ui.sidebar_width", 320))))
+        quick_width = min(600, max(SIDEBAR_MINIMUM_WIDTH, int(window.settings.get("ui.quick_settings_width", QUICK_SETTINGS_PANEL_WIDTH))))
         playlist_visible_width = round(playlist_width * self.playlist_progress)
         quick_visible_width = round(quick_width * self.quick_progress)
 
-        # The normal playlist is a transient overlay, just like the title and
-        # OSC chrome: it slides over the render surface without ever resizing
-        # it. Only an explicit Pin Playlist request turns it into a dock that
-        # reserves video space. Quick Settings is only shown here when pinned.
-        playlist_inset = playlist_visible_width if self.playlist_pinned else 0
+        # Every open sidebar is content geometry for aspect-lock purposes.
+        # Reserving its visible width avoids computing the ratio against the
+        # total frame, which distorts the video near the minimum window size.
+        playlist_inset = playlist_visible_width
         left_inset = (playlist_inset if side == "left" else 0) + (quick_visible_width if quick_side == "left" else 0)
         right_inset = (playlist_inset if side == "right" else 0) + (quick_visible_width if quick_side == "right" else 0)
         video_width = max(1, base.width() - left_inset - right_inset)
@@ -266,9 +272,13 @@ class SidebarController(QObject):
         if self.playlist_progress > 0:
             window.playlist_panel.show()
             window.playlist_panel.raise_()
+            if hasattr(window, "native_overlays"):
+                window.native_overlays.raise_widget(window.playlist_panel)
         if self.quick_progress > 0 and self.quick_dock._content is not None:
             self.quick_dock.show()
             self.quick_dock.raise_()
+            if hasattr(window, "native_overlays"):
+                window.native_overlays.raise_widget(self.quick_dock)
 
     def is_sidebar_widget(self, widget: QWidget | None) -> bool:
         while widget is not None:

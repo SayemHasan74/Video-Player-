@@ -28,6 +28,36 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from core.mpv_properties import (
+    AID,
+    AUDIO_DELAY,
+    BRIGHTNESS,
+    CONTRAST,
+    GAMMA,
+    GAPLESS_AUDIO,
+    HUE,
+    HWDEC,
+    REPLAYGAIN,
+    SATURATION,
+    SECONDARY_SID,
+    SECONDARY_SUB_DELAY,
+    SECONDARY_SUB_VISIBILITY,
+    SID,
+    SPEED,
+    SUB_BORDER_SIZE,
+    SUB_CODEPAGE,
+    SUB_COLOR,
+    SUB_DELAY,
+    SUB_FONT,
+    SUB_FONT_SIZE,
+    SUB_POS,
+    SUB_SHADOW_OFFSET,
+    SUB_VISIBILITY,
+    VIDEO_ASPECT_OVERRIDE,
+    VIDEO_ROTATE,
+    VOLUME,
+)
+
 
 class TrackSelector(QWidget):
     selected = pyqtSignal(object)
@@ -212,8 +242,8 @@ class QuickSettingsPanel(QTabWidget):
     def _video_page(self) -> QWidget:
         page = QWidget()
         form = QFormLayout(page)
-        form.addRow("Aspect ratio", self._combo(["auto", "16:9", "4:3", "21:9", "1.85:1", "2.35:1"], "video-aspect-override", True))
-        form.addRow("Rotate", self._combo(["0", "90", "180", "270"], "video-rotate"))
+        form.addRow("Aspect ratio", self._combo(["auto", "16:9", "4:3", "21:9", "1.85:1", "2.35:1"], VIDEO_ASPECT_OVERRIDE, True))
+        form.addRow("Rotate", self._combo(["0", "90", "180", "270"], VIDEO_ROTATE))
         crop_widget = QWidget()
         crop_layout = QGridLayout(crop_widget)
         crop_layout.setContentsMargins(0, 0, 0, 0)
@@ -232,12 +262,12 @@ class QuickSettingsPanel(QTabWidget):
         crop_layout.addWidget(select_crop, 1, 0, 1, 2)
         crop_layout.addWidget(clear_crop, 1, 2, 1, 2)
         form.addRow("Crop", crop_widget)
-        form.addRow("Hardware decoding", self._combo(["auto-safe", "auto", "no"], "hwdec"))
-        for label, prop in (("Brightness", "brightness"), ("Contrast", "contrast"), ("Saturation", "saturation"), ("Gamma", "gamma"), ("Hue", "hue")):
+        form.addRow("Hardware decoding", self._combo(["no", "auto", "d3d11va"], HWDEC))
+        for label, prop in (("Brightness", BRIGHTNESS), ("Contrast", CONTRAST), ("Saturation", SATURATION), ("Gamma", GAMMA), ("Hue", HUE)):
             form.addRow(label, self._slider(-100, 100, 0, prop, 0))
         self.speed = SpeedControl()
-        self.speed.changed.connect(lambda value: self._emit("speed", value))
-        self.controls["speed"] = self.speed
+        self.speed.changed.connect(lambda value: self._emit(SPEED, value))
+        self.controls[SPEED] = self.speed
         form.addRow("Speed 0.25×–16×", self.speed)
         return page
 
@@ -245,12 +275,12 @@ class QuickSettingsPanel(QTabWidget):
         page = QWidget()
         form = QFormLayout(page)
         self.audio_tracks = TrackSelector()
-        self.audio_tracks.selected.connect(lambda track_id: self._emit("aid", track_id))
+        self.audio_tracks.selected.connect(lambda track_id: self._emit(AID, track_id))
         form.addRow("Track", self.audio_tracks)
-        form.addRow("Delay", self._slider(-10, 10, 0, "audio-delay", 2))
-        form.addRow("ReplayGain", self._combo(["no", "track", "album"], "replaygain"))
-        form.addRow("Gapless", self._combo(["no", "weak", "yes"], "gapless-audio"))
-        volume = self._slider(0, 150, 80, "volume", 0)
+        form.addRow("Delay", self._slider(-10, 10, 0, AUDIO_DELAY, 2))
+        form.addRow("ReplayGain", self._combo(["no", "track", "album"], REPLAYGAIN))
+        form.addRow("Gapless", self._combo(["no", "weak", "yes"], GAPLESS_AUDIO))
+        volume = self._slider(0, 150, 80, VOLUME, 0)
         volume.setToolTip("Values above 100% can clip or distort audio.")
         form.addRow("Volume boost", volume)
         warning = QLabel("Above 100% may clip or distort")
@@ -289,14 +319,14 @@ class QuickSettingsPanel(QTabWidget):
         form.addRow("Hide all", self.hide_subtitles)
         self.primary_visible = QCheckBox("Visible")
         self.primary_visible.setChecked(True)
-        self.primary_visible.toggled.connect(lambda checked: self._emit("sub-visibility", checked and not self.hide_subtitles.isChecked()))
+        self.primary_visible.toggled.connect(lambda checked: self._emit(SUB_VISIBILITY, checked and not self.hide_subtitles.isChecked()))
         self.secondary_visible = QCheckBox("Visible")
         self.secondary_visible.setChecked(True)
-        self.secondary_visible.toggled.connect(lambda checked: self._emit("secondary-sub-visibility", checked and not self.hide_subtitles.isChecked()))
+        self.secondary_visible.toggled.connect(lambda checked: self._emit(SECONDARY_SUB_VISIBILITY, checked and not self.hide_subtitles.isChecked()))
         self.primary = QComboBox()
         self.secondary = QComboBox()
-        self.primary.currentIndexChanged.connect(lambda _index: self._emit("sid", self.primary.currentData()))
-        self.secondary.currentIndexChanged.connect(lambda _index: self._emit("secondary-sid", self.secondary.currentData()))
+        self.primary.currentIndexChanged.connect(lambda _index: self._emit(SID, self.primary.currentData()))
+        self.secondary.currentIndexChanged.connect(lambda _index: self._emit(SECONDARY_SID, self.secondary.currentData()))
         primary_row = QHBoxLayout()
         primary_row.addWidget(self.primary, 1)
         primary_row.addWidget(self.primary_visible)
@@ -305,24 +335,24 @@ class QuickSettingsPanel(QTabWidget):
         secondary_row.addWidget(self.secondary_visible)
         form.addRow("Primary", primary_row)
         form.addRow("Secondary", secondary_row)
-        form.addRow("Primary delay", self._slider(-10, 10, 0, "sub-delay", 2))
-        form.addRow("Secondary delay", self._slider(-10, 10, 0, "secondary-sub-delay", 2))
+        form.addRow("Primary delay", self._slider(-10, 10, 0, SUB_DELAY, 2))
+        form.addRow("Secondary delay", self._slider(-10, 10, 0, SECONDARY_SUB_DELAY, 2))
         self.font = QFontComboBox()
-        self.font.currentFontChanged.connect(lambda font: self._emit("sub-font", font.family()))
+        self.font.currentFontChanged.connect(lambda font: self._emit(SUB_FONT, font.family()))
         form.addRow("Font", self.font)
-        form.addRow("Size", self._slider(10, 100, 42, "sub-font-size", 0))
+        form.addRow("Size", self._slider(10, 100, 42, SUB_FONT_SIZE, 0))
         self.color = QLineEdit("#ffffff")
         color_button = QPushButton("Choose…")
         color_button.clicked.connect(self._choose_subtitle_color)
         color_row = QHBoxLayout()
         color_row.addWidget(self.color, 1)
         color_row.addWidget(color_button)
-        self.color.editingFinished.connect(lambda: self._emit("sub-color", self.color.text().strip()))
+        self.color.editingFinished.connect(lambda: self._emit(SUB_COLOR, self.color.text().strip()))
         form.addRow("Color", color_row)
-        form.addRow("Outline", self._slider(0, 10, 2, "sub-border-size", 1))
-        form.addRow("Shadow", self._slider(0, 10, 0, "sub-shadow-offset", 1))
-        form.addRow("Position", self._slider(0, 150, 100, "sub-pos", 0))
-        form.addRow("Encoding", self._combo(["auto", "UTF-8", "UTF-16", "CP1252", "ISO-8859-1", "GB18030", "Shift_JIS"], "sub-codepage", True))
+        form.addRow("Outline", self._slider(0, 10, 2, SUB_BORDER_SIZE, 1))
+        form.addRow("Shadow", self._slider(0, 10, 0, SUB_SHADOW_OFFSET, 1))
+        form.addRow("Position", self._slider(0, 150, 100, SUB_POS, 0))
+        form.addRow("Encoding", self._combo(["auto", "UTF-8", "UTF-16", "CP1252", "ISO-8859-1", "GB18030", "Shift_JIS"], SUB_CODEPAGE, True))
         search = QPushButton("Search online subtitles…")
         search.clicked.connect(self.findSubtitles.emit)
         form.addRow(search)
@@ -350,11 +380,11 @@ class QuickSettingsPanel(QTabWidget):
         selected = QColorDialog.getColor(QColor(self.color.text()), self, "Subtitle Color")
         if selected.isValid():
             self.color.setText(selected.name(QColor.NameFormat.HexArgb))
-            self._emit("sub-color", self.color.text())
+            self._emit(SUB_COLOR, self.color.text())
 
     def _hide_all_changed(self, hidden: bool) -> None:
-        self._emit("sub-visibility", self.primary_visible.isChecked() and not hidden)
-        self._emit("secondary-sub-visibility", self.secondary_visible.isChecked() and not hidden)
+        self._emit(SUB_VISIBILITY, self.primary_visible.isChecked() and not hidden)
+        self._emit(SECONDARY_SUB_VISIBILITY, self.secondary_visible.isChecked() and not hidden)
 
     def _apply_eq_preset(self, name: str) -> None:
         if name in self.EQ_PRESETS:
@@ -407,22 +437,22 @@ class QuickSettingsPanel(QTabWidget):
                 elif isinstance(control, SpeedControl):
                     control.set_value(float(value or 1))
                 elif isinstance(control, QComboBox):
-                    display = "auto" if prop == "video-aspect-override" and value == "no" else str(value)
+                    display = "auto" if prop == VIDEO_ASPECT_OVERRIDE and value == "no" else str(value)
                     control.setCurrentText(display)
-            if "aid" in state:
-                self.audio_tracks.set_current(state["aid"])
-            for combo, prop in ((self.primary, "sid"), (self.secondary, "secondary-sid")):
+            if AID in state:
+                self.audio_tracks.set_current(state[AID])
+            for combo, prop in ((self.primary, SID), (self.secondary, SECONDARY_SID)):
                 if prop in state:
                     index = combo.findData(state[prop])
                     if index >= 0:
                         combo.setCurrentIndex(index)
-            if "sub-visibility" in state:
-                self.hide_subtitles.setChecked(not bool(state["sub-visibility"]))
-            if "secondary-sub-visibility" in state:
-                self.secondary_visible.setChecked(bool(state["secondary-sub-visibility"]))
-            if "sub-font" in state and state["sub-font"]:
-                self.font.setCurrentFont(QFont(str(state["sub-font"])))
-            if "sub-color" in state and state["sub-color"]:
-                self.color.setText(str(state["sub-color"]))
+            if SUB_VISIBILITY in state:
+                self.hide_subtitles.setChecked(not bool(state[SUB_VISIBILITY]))
+            if SECONDARY_SUB_VISIBILITY in state:
+                self.secondary_visible.setChecked(bool(state[SECONDARY_SUB_VISIBILITY]))
+            if SUB_FONT in state and state[SUB_FONT]:
+                self.font.setCurrentFont(QFont(str(state[SUB_FONT])))
+            if SUB_COLOR in state and state[SUB_COLOR]:
+                self.color.setText(str(state[SUB_COLOR]))
         finally:
             self._reacting = False

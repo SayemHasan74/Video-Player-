@@ -15,7 +15,7 @@ BUILTIN_PROFILES: dict[str, dict[str, str]] = {
         "Up": "volume_up", "Down": "volume_down", "M": "mute", "F": "fullscreen",
         "Escape": "exit_fullscreen", "P": "playlist", "T": "always_on_top",
         "S": "screenshot", "Ctrl+O": "open_file", "Ctrl+U": "open_url",
-        ".": "next", ",": "previous", "Ctrl+M": "music_mode",
+        ".": "next", ",": "previous", "Ctrl+M": "music_mode", "Ctrl+Shift+O": "show_osc",
     },
     "IINA-style": {
         "Space": "play_pause", "Left": "seek_backward", "Right": "seek_forward",
@@ -41,11 +41,11 @@ BUILTIN_PROFILES: dict[str, dict[str, str]] = {
 ACTION_LABELS: dict[str, str] = {
     "play_pause": "Play / Pause", "seek_backward": "Seek Backward", "seek_forward": "Seek Forward",
     "volume_up": "Volume Up", "volume_down": "Volume Down", "mute": "Mute",
-    "fullscreen": "Toggle Fullscreen", "exit_fullscreen": "Pause and Minimize", "playlist": "Playlist",
+    "fullscreen": "Toggle Fullscreen", "exit_fullscreen": "Exit Fullscreen", "playlist": "Playlist",
     "always_on_top": "Always on Top", "screenshot": "Screenshot", "open_file": "Open File",
     "open_url": "Open URL", "next": "Next File", "previous": "Previous File", "music_mode": "Compact Mode",
     "pip": "Picture in Picture", "filters": "Filters", "inspector": "Inspector", "history": "History",
-    "preferences": "Preferences", "find_subtitles": "Find Subtitles",
+    "preferences": "Preferences", "find_subtitles": "Find Subtitles", "show_osc": "Show OSC Momentarily",
 }
 
 

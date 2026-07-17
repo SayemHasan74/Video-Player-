@@ -121,6 +121,7 @@ class _Spinner(QWidget):
         super().__init__(parent)
         self.settings = settings
         self.angle = 0
+        self.progress: int | None = None
         self.setFixedSize(26, 26)
         self.timer = QTimer(self)
         self.timer.setInterval(70)
@@ -137,6 +138,10 @@ class _Spinner(QWidget):
     def stop(self) -> None:
         self.timer.stop()
 
+    def set_progress(self, value: int | None) -> None:
+        self.progress = None if value is None else max(0, min(100, int(value)))
+        self.update()
+
     def _advance(self) -> None:
         self.angle = (self.angle + 30) % 360
         self.update()
@@ -144,6 +149,12 @@ class _Spinner(QWidget):
     def paintEvent(self, _event: object) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        if self.progress is not None:
+            painter.setPen(QPen(QColor(255, 255, 255, 55), 2.2))
+            painter.drawEllipse(4, 4, self.width() - 8, self.height() - 8)
+            painter.setPen(QPen(QColor(245, 245, 245, 230), 2.2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+            painter.drawArc(4, 4, self.width() - 8, self.height() - 8, 90 * 16, -round(360 * 16 * self.progress / 100))
+            return
         center = QPointF(self.width() / 2, self.height() / 2)
         radius = min(self.width(), self.height()) / 2 - 4
         for index in range(12):
@@ -185,9 +196,15 @@ class BufferingIndicator(QWidget):
         self.set_active(self.active)
 
     def set_active(self, active: bool) -> None:
+        self.set_state(active, 0)
+
+    def set_state(self, active: bool, percentage: int = 0) -> None:
         self.active = bool(active)
+        percentage = max(0, min(100, int(percentage)))
+        self.spinner.set_progress(percentage if percentage > 0 else None)
+        self.label.setText(f"Buffering… {percentage}%" if percentage > 0 else "Buffering…")
         visible = self.active and self.mode != "off"
-        if visible and self.mode in {"spinner", "both"}:
+        if visible and self.mode in {"spinner", "both"} and percentage <= 0:
             self.spinner.start()
         else:
             self.spinner.stop()

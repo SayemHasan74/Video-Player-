@@ -1,0 +1,24 @@
+"""Verified Section 2 window and OSC layout constants."""
+
+TITLE_BAR_HEIGHT = 28
+TOP_BAR_OSC_HEIGHT = 34
+TITLE_AND_TOP_OSC_HEIGHT = 62
+FULLSCREEN_TOP_OSC_HEIGHT = 34
+TOP_OSC_MARGIN_NORMAL = 26
+TOP_OSC_MARGIN_FULLSCREEN = 6
+SIDEBAR_MINIMUM_WIDTH = 240
+QUICK_SETTINGS_PANEL_WIDTH = 360
+SETTINGS_PANEL_WIDTH = QUICK_SETTINGS_PANEL_WIDTH
+
+# Tunable values explicitly identified as such by the specification.
+MIN_WINDOW_SIZE = (285, 130)
+FLOATING_OSC_HEIGHT = 82
+FLOATING_OSC_BOTTOM_MARGIN = 16
+FLOATING_OSC_MIN_WIDTH = 420
+FLOATING_OSC_MAX_WIDTH = 900
+FLOATING_OSC_TOP_BAND = 90
+
+# The existing application menu is Comet-specific rather than an IINA
+# constant. Keep it centralized beside the chrome geometry it participates in.
+APP_MENU_HEIGHT = 32
+CONTROL_BAR_HEIGHT = TOP_BAR_OSC_HEIGHT

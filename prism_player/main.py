@@ -4,45 +4,28 @@ from __future__ import annotations
 
 import argparse
 import logging
-import os
 import sys
 from pathlib import Path
 
 CURRENT_DIR = Path(__file__).resolve().parent
 if str(CURRENT_DIR) not in sys.path:
     sys.path.insert(0, str(CURRENT_DIR))
-_DLL_DIRECTORY_HANDLES = []
+from core.dll_bootstrap import load_vendored_mpv, vendored_mpv_path
 
+# Step 1: absolute ctypes.CDLL load. No Qt module is imported before this call.
+_MPV_BOOTSTRAP_ERROR: Exception | None = None
+try:
+    load_vendored_mpv()
+except (FileNotFoundError, OSError) as exc:
+    _MPV_BOOTSTRAP_ERROR = exc
 
-def bootstrap_mpv_environment() -> tuple[Path, ...]:
-    """Expose libmpv before any Qt/application module can import python-mpv."""
-    frozen_root = Path(getattr(sys, "_MEIPASS", CURRENT_DIR))
-    candidates = (CURRENT_DIR / "bin", CURRENT_DIR, CURRENT_DIR.parent, frozen_root)
-    directories: list[Path] = []
-    seen: set[str] = set()
-    for directory in candidates:
-        key = str(directory.resolve()).casefold()
-        if key not in seen and directory.exists():
-            directories.append(directory)
-            seen.add(key)
-    existing = os.environ.get("PATH", "")
-    os.environ["PATH"] = os.pathsep.join([*(str(path) for path in directories), existing])
-    return tuple(directories)
-
-
-for dll_dir in bootstrap_mpv_environment():
-    if hasattr(os, "add_dll_directory") and dll_dir.exists():
-        _DLL_DIRECTORY_HANDLES.append(os.add_dll_directory(str(dll_dir)))
-
-# These imports intentionally happen after bootstrap_mpv_environment().
+# Step 2: Qt imports happen only after the vendored DLL bootstrap.
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColorSpace, QIcon, QSurfaceFormat
 from PyQt6.QtWidgets import QApplication, QMessageBox
 
 from config.settings import APP_NAME, APP_VERSION, SettingsStore, global_stylesheet
 from core.history_manager import HistoryManager
-from core.player_backend import PlayerBackend
-from ui.player_window_manager import PlayerWindowManager
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -85,7 +68,8 @@ def show_mpv_missing_dialog() -> None:
         None,
         "mpv-2.dll not found",
         f"{APP_NAME} needs mpv-2.dll to play media.\n\n"
-        f"Place mpv-2.dll or libmpv-2.dll beside main.py or anywhere on PATH, then run {APP_NAME} again.",
+        f"Expected the vendored DLL at:\n{vendored_mpv_path()}\n\n"
+        "Reinstall the application or restore bin\\mpv-2.dll.",
     )
 
 
@@ -96,6 +80,9 @@ def main(argv: list[str] | None = None) -> int:
     settings = SettingsStore()
     settings.load()
     QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
+    QApplication.setHighDpiScaleFactorRoundingPolicy(
+        Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
+    )
     surface_format = QSurfaceFormat()
     surface_format.setRenderableType(QSurfaceFormat.RenderableType.OpenGL)
     surface_format.setVersion(3, 3)
@@ -106,14 +93,30 @@ def main(argv: list[str] | None = None) -> int:
     else:
         surface_format.setColorSpace(QColorSpace(QColorSpace.NamedColorSpace.SRgb))
     QSurfaceFormat.setDefaultFormat(surface_format)
+    # Step 3: construct QApplication.
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
     app.setApplicationVersion(APP_VERSION)
     app.setWindowIcon(QIcon(str(CURRENT_DIR / "assets" / "prism_logo.ico")))
     app.setStyleSheet(global_stylesheet())
-    if not PlayerBackend.mpv_dll_exists(CURRENT_DIR):
+    if _MPV_BOOTSTRAP_ERROR is not None:
         show_mpv_missing_dialog()
         return 1
+
+    # Step 4: Qt may replace LC_NUMERIC, so restore C immediately after app creation.
+    import locale
+
+    locale.setlocale(locale.LC_NUMERIC, "C")
+
+    # Step 5: import python-mpv through its sole owner only now.
+    from core.mpv_engine import import_mpv_module
+
+    import_mpv_module()
+
+    # Importing the window graph after python-mpv preserves the bootstrap order;
+    # the first MpvEngine created by PlayerWindowManager is step 6.
+    from ui.player_window_manager import PlayerWindowManager
+
     history = HistoryManager()
     startup_files = normalize_startup_files(args.files)
     window_manager = PlayerWindowManager(settings, history)

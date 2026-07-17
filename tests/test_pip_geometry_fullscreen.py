@@ -22,6 +22,7 @@ from config.settings import SettingsStore
 from core.history_manager import HistoryManager
 from core.player_backend import PlayerBackend
 from ui.main_window import MainWindow
+from ui.osc_layout_constants import APP_MENU_HEIGHT, TITLE_BAR_HEIGHT
 from ui.window_mode import WindowMode
 
 
@@ -71,19 +72,31 @@ class PipGeometryFullscreenTests(unittest.TestCase):
             window = self._window(Path(directory), {"playback.auto_resize": True})
             info = {"source": "movie.mkv", "has_video": True, "video_width": 1920, "video_height": 1080, "video_aspect": 16 / 9}
             window._media_info_changed(info); APP.processEvents()
-            self.assertAlmostEqual(window.width() / window.height(), 16 / 9, delta=0.03)
+            chrome_height = TITLE_BAR_HEIGHT + APP_MENU_HEIGHT
+            self.assertAlmostEqual(
+                window.width() / (window.height() - chrome_height),
+                16 / 9,
+                delta=0.03,
+            )
             window.setGeometry(100, 100, 900, 506); APP.processEvents()
             window._resize_edge = "right"
             window._resize_geometry = window.geometry()
             window._resize_start = QPoint(1000, 350)
             with patch.object(QApplication, "keyboardModifiers", return_value=Qt.KeyboardModifier.NoModifier):
                 window._perform_resize(QPoint(1160, 350)); window._apply_pending_resize()
-            self.assertAlmostEqual(window.width() / window.height(), 16 / 9, delta=0.03)
-            locked_height = window.height()
+            self.assertAlmostEqual(
+                window.width() / (window.height() - chrome_height),
+                16 / 9,
+                delta=0.03,
+            )
             window._resize_geometry = window.geometry(); window._resize_start = QPoint(1160, 350)
             with patch.object(QApplication, "keyboardModifiers", return_value=Qt.KeyboardModifier.AltModifier):
                 window._perform_resize(QPoint(1260, 350)); window._apply_pending_resize()
-            self.assertEqual(window.height(), locked_height)
+            self.assertAlmostEqual(
+                window.width() / (window.height() - chrome_height),
+                16 / 9,
+                delta=0.03,
+            )
             self._dispose(window)
 
     def test_display_identity_is_persisted_and_fullscreen_keeps_osc_visible(self) -> None:
@@ -117,10 +130,9 @@ class PipGeometryFullscreenTests(unittest.TestCase):
     def test_optional_video_drag_moves_window_and_video_scroll_setting_is_independent(self) -> None:
         with TemporaryDirectory() as directory:
             window = self._window(Path(directory), {"window.drag_from_video": True, "ui.video_scroll_enabled": False, "ui.osc_scroll_enabled": True})
-            start = window.frameGeometry().topLeft()
-            window._start_video_window_drag(QPoint(300, 300))
-            window._move_video_window_drag(QPoint(340, 325))
-            self.assertEqual(window.frameGeometry().topLeft(), start + QPoint(40, 25))
+            with patch.object(window, "_start_system_move") as system_move:
+                window._start_video_window_drag(QPoint(300, 300))
+                system_move.assert_called_once_with(QPoint(300, 300))
             with patch.object(window.player, "change_volume") as volume:
                 window._handle_video_scroll(5)
                 volume.assert_not_called()

@@ -29,6 +29,8 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from core.mpv_properties import VID
+
 from assets.icons import svg_icon
 from config.settings import APP_SHORT_NAME
 from core.cover_art import extract_cover_art
@@ -527,7 +529,7 @@ class MusicModeController(QObject):
             bool(info.get("has_audio")) and not bool(info.get("has_video"))
         )
         if audio_only:
-            self.window.player.set_property("vid", "no")
+            self.window.player.set_property(VID, "no")
             self._start_cover_art(source)
             self.enter_auto()
         elif self._auto_entered and self.window.window_modes.is_compact:

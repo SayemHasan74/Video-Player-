@@ -15,6 +15,7 @@ from core.playlist_manager import PlaylistItem
 from core.media_probe import matching_subtitles, probe_media
 from ui.quick_settings import QuickSettingsPanel
 from utils.time_utils import format_time
+from ui.osc_layout_constants import SIDEBAR_MINIMUM_WIDTH
 
 
 _PROBE_CACHE: dict[tuple[object, ...], dict] = {}
@@ -191,7 +192,7 @@ class PlaylistPanel(QWidget):
         self._common_prefix = ""
         self._show_full_paths = False
         self._chapters: list[dict] = []
-        self.setMinimumWidth(240)
+        self.setMinimumWidth(SIDEBAR_MINIMUM_WIDTH)
         self.setMaximumWidth(600)
         self.setMouseTracking(True)
         # A styled/autofilled background clears newly exposed pixels. Do not

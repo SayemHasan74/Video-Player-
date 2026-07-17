@@ -11,6 +11,7 @@ from PyQt6.QtCore import QObject, QRect, pyqtSignal
 from config.settings import CONTROL_BAR_HEIGHT, MIN_WINDOW_SIZE, TITLE_BAR_HEIGHT
 
 APP_MENU_HEIGHT = 32
+COMPACT_PLAYER_HEIGHT = 140
 
 
 class WindowMode(Enum):
@@ -19,6 +20,13 @@ class WindowMode(Enum):
     FULLSCREEN = auto()
     COMPACT = auto()
     PIP = auto()
+
+
+class FullscreenState(Enum):
+    WINDOWED = auto()
+    ANIMATING_TO_FULLSCREEN = auto()
+    FULLSCREEN = auto()
+    ANIMATING_TO_WINDOWED = auto()
 
 
 @dataclass(frozen=True)
@@ -42,6 +50,8 @@ class WindowModeController(QObject):
         self.fullscreen_snapshot: WindowSnapshot | None = None
         self.pip_snapshot: WindowSnapshot | None = None
         self.transitioning = False
+        self.fullscreen_state = FullscreenState.WINDOWED
+        self._pending_fullscreen_exit = False
 
     @property
     def is_compact(self) -> bool:
@@ -55,6 +65,13 @@ class WindowModeController(QObject):
         if self.is_compact or self.is_pip:
             return
         self.mode = self._native_mode()
+        if self.fullscreen_state not in {
+            FullscreenState.ANIMATING_TO_FULLSCREEN,
+            FullscreenState.ANIMATING_TO_WINDOWED,
+        }:
+            self.fullscreen_state = (
+                FullscreenState.FULLSCREEN if self.window.isFullScreen() else FullscreenState.WINDOWED
+            )
 
     def toggle_compact(self) -> None:
         if self.transitioning:
@@ -84,7 +101,10 @@ class WindowModeController(QObject):
             compact_height = (
                 music_mode.target_height()
                 if music_mode is not None
-                else TITLE_BAR_HEIGHT + APP_MENU_HEIGHT + CONTROL_BAR_HEIGHT
+                else max(
+                    COMPACT_PLAYER_HEIGHT,
+                    TITLE_BAR_HEIGHT + APP_MENU_HEIGHT + CONTROL_BAR_HEIGHT,
+                )
             )
             self.window.setMaximumHeight(16777215)
             self.window.setMinimumSize(520 if music_mode is not None else 420, compact_height)
@@ -122,14 +142,18 @@ class WindowModeController(QObject):
             self._finish()
 
     def toggle_fullscreen(self) -> None:
-        if self.transitioning:
+        if self.fullscreen_state in {
+            FullscreenState.ANIMATING_TO_FULLSCREEN,
+            FullscreenState.ANIMATING_TO_WINDOWED,
+        } or self.transitioning:
             return
         if self.is_pip:
             self.exit_pip()
         if self.is_compact:
             self.exit_compact()
         self._begin()
-        if self.mode is WindowMode.FULLSCREEN or self.window.isFullScreen():
+        if self.fullscreen_state is FullscreenState.FULLSCREEN or self.window.isFullScreen():
+            self.fullscreen_state = FullscreenState.ANIMATING_TO_WINDOWED
             snapshot = self.fullscreen_snapshot or WindowSnapshot(
                 WindowMode.NORMAL, QRect(self.window.normalGeometry()), False, True
             )
@@ -139,10 +163,14 @@ class WindowModeController(QObject):
                 self._restore_native_state(snapshot)
                 self._restore_ui(snapshot)
                 self.fullscreen_snapshot = None
+
+            def complete() -> None:
+                self.fullscreen_state = FullscreenState.WINDOWED
+                self._finish()
         else:
             self.sync_from_window()
             self.fullscreen_snapshot = self._snapshot()
-            self.mode = WindowMode.FULLSCREEN
+            self.fullscreen_state = FullscreenState.ANIMATING_TO_FULLSCREEN
             self._hide_playlist()
 
             def change() -> None:
@@ -151,12 +179,30 @@ class WindowModeController(QObject):
                 self.window._chrome_visible = True
                 self.window._apply_mode_layout()
 
+            def complete() -> None:
+                self.mode = WindowMode.FULLSCREEN
+                self.fullscreen_state = FullscreenState.FULLSCREEN
+                self._finish()
+                if self._pending_fullscreen_exit:
+                    self._pending_fullscreen_exit = False
+                    self.exit_fullscreen()
+
         animate = getattr(self.window, "_animate_fullscreen_change", None)
         if callable(animate):
-            animate(change, self._finish)
+            animate(change, complete)
         else:
             change()
-            self._finish()
+            complete()
+
+    def exit_fullscreen(self) -> None:
+        """Exit fullscreen from every transition state; Esc uses this path."""
+        if self.fullscreen_state is FullscreenState.ANIMATING_TO_FULLSCREEN:
+            self._pending_fullscreen_exit = True
+            return
+        if self.fullscreen_state is FullscreenState.ANIMATING_TO_WINDOWED:
+            return
+        if self.fullscreen_state is FullscreenState.FULLSCREEN or self.window.isFullScreen():
+            self.toggle_fullscreen()
 
     def toggle_maximized(self) -> None:
         if self.transitioning:

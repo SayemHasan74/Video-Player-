@@ -15,10 +15,22 @@ from PyQt6.QtCore import (
     Qt,
 )
 
-from config.settings import CONTROL_BAR_HEIGHT, PLAYLIST_PANEL_WIDTH, TITLE_BAR_HEIGHT
+from core.preferences import (
+    ENABLE_TITLE_BAR_AND_OSC,
+    OSC_HIDE_DELAY_MS,
+    OSC_POSITION,
+)
+from ui.osc_layout_constants import (
+    APP_MENU_HEIGHT,
+    FLOATING_OSC_BOTTOM_MARGIN,
+    FLOATING_OSC_MAX_WIDTH,
+    FLOATING_OSC_MIN_WIDTH,
+    FLOATING_OSC_TOP_BAND,
+    TITLE_BAR_HEIGHT,
+    TOP_OSC_MARGIN_FULLSCREEN,
+    TOP_OSC_MARGIN_NORMAL,
+)
 from utils.accessibility import transitions_enabled
-
-APP_MENU_HEIGHT = 32
 
 
 class OverlayController(QObject):
@@ -30,7 +42,15 @@ class OverlayController(QObject):
         self.animation: QParallelAnimationGroup | None = None
         self.hide_timer = QTimer(self)
         self.hide_timer.setSingleShot(True)
-        self.hide_timer.timeout.connect(self.hide)
+        self.hide_timer.timeout.connect(self._timer_fired)
+        self._momentary = False
+
+    def _timer_fired(self) -> None:
+        if self._momentary:
+            self._momentary = False
+            self.animate(False)
+        else:
+            self.hide()
 
     def stop_transients(self) -> None:
         self.hide_timer.stop()
@@ -43,12 +63,15 @@ class OverlayController(QObject):
         window = self.window
         if window._mini_mode or window._pip_mode:
             return
+        if not window.settings.get(ENABLE_TITLE_BAR_AND_OSC, True):
+            self.animate(False)
+            return
         if window.settings.get("ui.osc_always_visible", False):
             self.hide_timer.stop()
             if not window._chrome_visible:
                 self.show()
         elif window.settings.get("ui.hide_controls_while_playing", True):
-            configured = max(100, int(window.settings.get("ui.osc_hide_delay_ms", delay_ms)))
+            configured = max(100, int(window.settings.get(OSC_HIDE_DELAY_MS, delay_ms)))
             self.hide_timer.start(configured)
         else:
             self.hide_timer.stop()
@@ -56,7 +79,16 @@ class OverlayController(QObject):
                 self.show()
 
     def show(self) -> None:
+        self._momentary = False
         self.animate(True)
+
+    def show_momentarily(self) -> None:
+        if not self.window.settings.get(ENABLE_TITLE_BAR_AND_OSC, True):
+            return
+        self.animate(True)
+        self._momentary = True
+        delay = max(100, int(self.window.settings.get(OSC_HIDE_DELAY_MS, 3000)))
+        self.hide_timer.start(delay)
 
     def hide(self) -> None:
         window = self.window
@@ -71,9 +103,9 @@ class OverlayController(QObject):
     def move_floating(self, delta_y: int) -> None:
         """Move the floating OSC vertically while keeping it inside the video."""
         window = self.window
-        if str(window.settings.get("ui.osc_position", "floating")) != "floating":
+        if str(window.settings.get(OSC_POSITION, "floating")) != "floating":
             return
-        maximum = max(0, window.central_shell.height() - window.control_bar.height() - 90)
+        maximum = max(0, window.central_shell.height() - window.control_bar.height() - FLOATING_OSC_TOP_BAND)
         current = int(window.settings.get("ui.osc_floating_offset", 0))
         window.settings.set("ui.osc_floating_offset", max(0, min(maximum, current - int(delta_y))))
         self.position()
@@ -82,22 +114,30 @@ class OverlayController(QObject):
         window = self.window
         if window.central_shell is None or window.isMinimized():
             return
+        if not window.settings.get(ENABLE_TITLE_BAR_AND_OSC, True):
+            show = False
         if window._pip_mode:
+            window._set_top_chrome_reserved(False)
             if window.app_menu_bar is not None:
                 window.app_menu_bar.hide()
             window.title_bar.hide()
             window.control_bar.hide()
             return
         if window._mini_mode:
+            window._set_top_chrome_reserved(False)
             if window.app_menu_bar is not None:
                 window.app_menu_bar.hide()
             window.title_bar.hide()
             window.control_bar.hide()
             window.music_mode.reveal_controls()
             self.position()
+            window._update_cursor_visibility()
             return
         if not transitions_enabled(window.settings):
             window._chrome_visible = show
+            window._set_top_chrome_reserved(
+                bool(window.settings.get(ENABLE_TITLE_BAR_AND_OSC, True))
+            )
             if window.app_menu_bar is not None:
                 window.app_menu_bar.setVisible(show)
             window.title_bar.setVisible(show)
@@ -105,6 +145,7 @@ class OverlayController(QObject):
             window.title_bar.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, not show)
             window.control_bar.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, not show)
             self.position()
+            window._update_cursor_visibility()
             return
         if window._chrome_visible == show and self.animation is None:
             return
@@ -157,6 +198,7 @@ class OverlayController(QObject):
                 window.title_bar.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
                 window.control_bar.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
                 self._raise_chrome()
+            window._update_cursor_visibility()
             self.animation = None
 
         group.finished.connect(finish)
@@ -170,7 +212,11 @@ class OverlayController(QObject):
             return
         shell_rect = shell.rect()
         menu = window.app_menu_bar
-        osc_position = str(window.settings.get("ui.osc_position", "floating"))
+        osc_position = str(window.settings.get(OSC_POSITION, "floating"))
+        show_top_chrome = bool(window.settings.get(ENABLE_TITLE_BAR_AND_OSC, True))
+        window._set_top_chrome_reserved(
+            show_top_chrome and not window._pip_mode and not window._mini_mode
+        )
         base_video_rect = QRect(shell_rect)
         if window._pip_mode:
             window.video.setGeometry(base_video_rect)
@@ -187,7 +233,9 @@ class OverlayController(QObject):
         elif osc_position == "bottom":
             # Reserve one stable dock strip even while the OSC is hidden. This
             # prevents the libmpv render surface from resizing on every reveal.
-            base_video_rect = QRect(0, 0, shell_rect.width(), max(0, shell_rect.height() - window.control_bar.height()))
+            base_video_rect.setHeight(
+                max(0, base_video_rect.height() - window.control_bar.height())
+            )
         # In the normal window modes SidebarController is the sole owner of
         # video geometry.  Setting the full-width rectangle here and the
         # sidebar-adjusted rectangle a few lines later caused a visible
@@ -201,9 +249,10 @@ class OverlayController(QObject):
             else:
                 title_y = 0 if window._chrome_visible else -TITLE_BAR_HEIGHT
                 menu_y = TITLE_BAR_HEIGHT if window._chrome_visible else -APP_MENU_HEIGHT
-                window.title_bar.setGeometry(0, title_y, shell_rect.width(), TITLE_BAR_HEIGHT)
+                chrome_width = window.width()
+                window.title_bar.setGeometry(0, title_y, chrome_width, TITLE_BAR_HEIGHT)
                 if menu is not None:
-                    menu.setGeometry(0, menu_y, shell_rect.width(), APP_MENU_HEIGHT)
+                    menu.setGeometry(0, menu_y, chrome_width, APP_MENU_HEIGHT)
                 window.control_bar.setGeometry(self._control_geometry(window._chrome_visible))
                 chrome_visible = window._chrome_visible and not window.isMinimized()
                 window.title_bar.setVisible(chrome_visible)
@@ -230,6 +279,8 @@ class OverlayController(QObject):
         )
         if window.osd.isVisible():
             window.osd.reposition()
+        if hasattr(window, "native_overlays"):
+            window.native_overlays.raise_all()
 
     def _raise_chrome(self) -> None:
         window = self.window
@@ -237,6 +288,8 @@ class OverlayController(QObject):
         if window.app_menu_bar is not None:
             window.app_menu_bar.raise_()
         window.control_bar.raise_()
+        if hasattr(window, "native_overlays"):
+            window.native_overlays.raise_widget(window.control_bar)
 
     def _control_geometry(self, visible: bool) -> QRect:
         window = self.window
@@ -244,16 +297,19 @@ class OverlayController(QObject):
         if shell is None:
             return QRect()
         rect = shell.rect()
-        mode = str(window.settings.get("ui.osc_position", "floating"))
+        mode = str(window.settings.get(OSC_POSITION, "floating"))
         height = window.control_bar.height()
         if mode == "floating":
-            width = max(420, min(900, rect.width() - 32))
+            available_width = max(1, rect.width() - 32)
+            width = min(FLOATING_OSC_MAX_WIDTH, max(FLOATING_OSC_MIN_WIDTH, available_width))
+            width = min(width, available_width)
             x = max(0, (rect.width() - width) // 2)
             offset = max(0, int(window.settings.get("ui.osc_floating_offset", 0)))
-            y = rect.height() - height - 16 - offset if visible else rect.height() + 4
+            y = rect.height() - height - FLOATING_OSC_BOTTOM_MARGIN - offset if visible else rect.height() + 4
             return QRect(x, y, width, height)
         if mode == "top":
-            y = TITLE_BAR_HEIGHT + APP_MENU_HEIGHT if visible else -height
+            margin = TOP_OSC_MARGIN_FULLSCREEN if window.isFullScreen() else TOP_OSC_MARGIN_NORMAL
+            y = margin if visible else -height
             return QRect(0, y, rect.width(), height)
         y = rect.height() - height if visible else rect.height()
         return QRect(0, y, rect.width(), height)

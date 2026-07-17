@@ -21,4 +21,10 @@ def system_animations_enabled() -> bool:
 
 
 def transitions_enabled(settings: object) -> bool:
-    return bool(settings.get("ui.animations", True)) and system_animations_enabled()
+    # ``ui.animations`` is accepted as a migration alias for older settings
+    # files, but only the Section 2 disableWindowAnimation preference is shown.
+    legacy = settings.get("ui.animations", None)
+    enabled = bool(legacy) if legacy is not None else not bool(
+        settings.get("ui.disableWindowAnimation", False)
+    )
+    return enabled and system_animations_enabled()

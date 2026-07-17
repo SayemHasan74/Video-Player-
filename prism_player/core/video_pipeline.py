@@ -6,6 +6,18 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from core.mpv_properties import (
+    GAMUT_MAPPING_MODE,
+    HDR_COMPUTE_PEAK,
+    HWDEC,
+    ICC_PROFILE,
+    TARGET_COLORSPACE_HINT,
+    TARGET_COLORSPACE_HINT_MODE,
+    TARGET_PRIM,
+    TARGET_TRC,
+    TONE_MAPPING,
+)
+
 
 @dataclass(frozen=True)
 class VideoPipelineConfig:
@@ -17,7 +29,7 @@ class VideoPipelineConfig:
     must all support tagging the surface correctly.
     """
 
-    hwdec: str = "auto-safe"
+    hwdec: str = "no"
     hwdec_fallback: bool = True
     color_space: str = "srgb"
     hdr_mode: str = "auto"
@@ -29,7 +41,7 @@ class VideoPipelineConfig:
     @classmethod
     def from_settings(cls, settings: Any) -> "VideoPipelineConfig":
         return cls(
-            hwdec=str(settings.get("video.hwdec", "auto-safe")),
+            hwdec=str(settings.get("video.hwdec", "no")),
             hwdec_fallback=bool(settings.get("video.hwdec_fallback", True)),
             color_space=str(settings.get("video.color_space", "srgb")),
             hdr_mode=str(settings.get("video.hdr_mode", "auto")),
@@ -40,7 +52,7 @@ class VideoPipelineConfig:
         ).validated()
 
     def validated(self) -> "VideoPipelineConfig":
-        hwdec = self.hwdec if self.hwdec in {"auto-safe", "auto", "no"} else "auto-safe"
+        hwdec = self.hwdec if self.hwdec in {"auto", "d3d11va", "no"} else "no"
         color_space = self.color_space if self.color_space in {"srgb", "display-p3"} else "srgb"
         hdr_mode = self.hdr_mode if self.hdr_mode in {"auto", "sdr", "passthrough"} else "auto"
         tone_mapping = self.tone_mapping if self.tone_mapping in {
@@ -72,15 +84,15 @@ class VideoPipelineConfig:
             # declared Qt surface is the reliable SDR fallback.
             hint, hint_mode = "no", "target"
         properties: dict[str, object] = {
-            "hwdec": self.hwdec,
-            "target-prim": target_prim,
-            "target-trc": target_trc,
-            "target-colorspace-hint": hint,
-            "target-colorspace-hint-mode": hint_mode,
-            "tone-mapping": self.tone_mapping,
-            "gamut-mapping-mode": self.gamut_mapping,
-            "hdr-compute-peak": self.hdr_peak_detection,
+            HWDEC: self.hwdec,
+            TARGET_PRIM: target_prim,
+            TARGET_TRC: target_trc,
+            TARGET_COLORSPACE_HINT: hint,
+            TARGET_COLORSPACE_HINT_MODE: hint_mode,
+            TONE_MAPPING: self.tone_mapping,
+            GAMUT_MAPPING_MODE: self.gamut_mapping,
+            HDR_COMPUTE_PEAK: self.hdr_peak_detection,
         }
         if self.icc_profile:
-            properties["icc-profile"] = self.icc_profile
+            properties[ICC_PROFILE] = self.icc_profile
         return properties

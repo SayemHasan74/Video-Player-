@@ -73,7 +73,7 @@ class AdvancedSidebarTests(unittest.TestCase):
             self.assertEqual(tab_ids[:3], ["playlist", "chapters", "quick_settings"])
             self._dispose(window)
 
-    def test_unpinned_slide_overlays_video_without_resizing_it(self) -> None:
+    def test_unpinned_slide_reserves_video_content_during_transition(self) -> None:
         with TemporaryDirectory() as directory:
             window = self._window(Path(directory), {"ui.animations": True})
             widths: list[int] = []
@@ -89,9 +89,9 @@ class AdvancedSidebarTests(unittest.TestCase):
             loop.exec()
             self.assertGreater(len(widths), 3)
             self.assertEqual(len(set(heights)), 1)
-            self.assertEqual(len(set(widths)), 1)
+            self.assertGreater(len(set(widths)), 1)
             self.assertEqual(window.sidebars.playlist_progress, 1.0)
-            self.assertLess(window.playlist_panel.x(), window.video.geometry().right())
+            self.assertLess(window.video.geometry().right(), window.playlist_panel.x())
             self._dispose(window)
 
     def test_reduced_motion_finishes_immediately_without_animation(self) -> None:
@@ -134,7 +134,7 @@ class AdvancedSidebarTests(unittest.TestCase):
             self.assertEqual(window.settings.get("ui.quick_settings_width"), 365)
             self._dispose(window)
 
-    def test_unpinned_width_drag_resizes_only_the_playlist_overlay(self) -> None:
+    def test_unpinned_width_drag_keeps_video_region_separate(self) -> None:
         with TemporaryDirectory() as directory:
             window = self._window(Path(directory), {"ui.animations": False})
             window.sidebars.set_playlist_visible(True, animate=False)
@@ -151,8 +151,8 @@ class AdvancedSidebarTests(unittest.TestCase):
                 loop = QEventLoop()
                 QTimer.singleShot(30, loop.quit)
                 loop.exec()
-            self.assertEqual(widths, [])
-            self.assertEqual(window.video.width(), full_width)
+            self.assertTrue(widths)
+            self.assertEqual(window.video.width(), full_width - 420)
             self.assertEqual(window.playlist_panel.width(), 420)
             self._dispose(window)
 
@@ -166,6 +166,8 @@ class AdvancedSidebarTests(unittest.TestCase):
             self.assertEqual(window.playlist_panel.width(), 420)
             self.assertEqual(window.video.width(), full_width - 420)
             window.sidebars.set_playlist_pinned(False)
+            self.assertEqual(window.video.width(), full_width - 420)
+            window.sidebars.request_close_playlist()
             self.assertEqual(window.video.width(), full_width)
             self._dispose(window)
 

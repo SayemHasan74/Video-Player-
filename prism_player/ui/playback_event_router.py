@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from PyQt6.QtCore import QObject
+from PyQt6.QtCore import QObject, Qt
 
 from utils.time_utils import format_time
 
@@ -38,7 +38,7 @@ class PlaybackEventRouter(QObject):
         self._connect(player.tracksChanged, self.tracks_changed)
         self._connect(player.chaptersChanged, window.playlist_panel.set_chapters)
         self._connect(player.chaptersChanged, window.control_bar.set_chapters)
-        self._connect(player.bufferingChanged, window.buffering_indicator.set_active)
+        self._connect(player.bufferingStateChanged, window.buffering_indicator.set_state)
         self._connect(player.bufferRangesChanged, window.control_bar.set_buffered_ranges)
         self._connect(player.fileEnded, window._play_next)
         self._connect(player.gaplessAdvanced, window._gapless_advanced)
@@ -142,5 +142,5 @@ class PlaybackEventRouter(QObject):
         self.window.osd.show_message(text, "error")
 
     def _connect(self, signal: Any, slot: Callable[..., Any]) -> None:
-        signal.connect(slot)
+        signal.connect(slot, Qt.ConnectionType.QueuedConnection)
         self._connections.append((signal, slot))

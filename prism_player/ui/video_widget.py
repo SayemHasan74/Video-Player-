@@ -1,18 +1,19 @@
-"""OpenGL mpv render surface and user-input view."""
+"""QWidget host for the native mpv QWindow and ordinary Qt overlays."""
 
 from __future__ import annotations
 
-import logging
 from typing import Any
 
-from PyQt6.QtCore import QPoint, Qt, pyqtSignal
-from PyQt6.QtGui import QKeyEvent, QMouseEvent, QOpenGLContext, QWheelEvent
-from PyQt6.QtOpenGLWidgets import QOpenGLWidget
-from PyQt6.QtWidgets import QWidget
+from PyQt6.QtCore import QObject, QPoint, Qt, pyqtSignal
+from PyQt6.QtGui import QGuiApplication
+from PyQt6.QtWidgets import QVBoxLayout, QWidget
+
+from core.mpv_engine import MpvEngine
+from ui.mpv_render_window import MpvRenderWindow
 
 
-class VideoWidget(QOpenGLWidget):
-    """Qt-owned OpenGL surface rendered by libmpv's render-context API."""
+class _OffscreenRenderStub(QObject):
+    """Non-native stand-in used only by Qt's headless test platform."""
 
     doubleClicked = pyqtSignal()
     clicked = pyqtSignal()
@@ -25,216 +26,121 @@ class VideoWidget(QOpenGLWidget):
     dragMoved = pyqtSignal(QPoint)
     dragEnded = pyqtSignal()
     keyPressed = pyqtSignal(object)
-    frameReady = pyqtSignal()
+    rendererReady = pyqtSignal()
+    rendererDestroyed = pyqtSignal()
+    rendererError = pyqtSignal(str)
+
+    def __init__(self, host: QWidget) -> None:
+        super().__init__(host)
+        self.host = host
+        self.renderer_active = False
+        self.renderer_generation = 0
+        self.framebuffer_size = (0, 0)
+
+    def set_engine(self, _engine: MpvEngine | None) -> None:
+        pass
+
+    def ensure_renderer(self) -> bool:
+        return False
+
+    def shutdown_renderer(self, _permanent: bool = True) -> None:
+        pass
+
+    def devicePixelRatio(self) -> float:
+        return self.host.devicePixelRatioF()
+
+
+class VideoWidget(QWidget):
+    """Overlay-safe host; the native render window remains internal plumbing."""
+
+    doubleClicked = pyqtSignal()
+    clicked = pyqtSignal()
+    rightClicked = pyqtSignal(QPoint)
+    middleClicked = pyqtSignal()
+    scrolled = pyqtSignal(int)
+    mouseMoved = pyqtSignal()
+    mousePositionChanged = pyqtSignal(QPoint)
+    dragStarted = pyqtSignal(QPoint)
+    dragMoved = pyqtSignal(QPoint)
+    dragEnded = pyqtSignal()
+    keyPressed = pyqtSignal(object)
     rendererReady = pyqtSignal()
     rendererDestroyed = pyqtSignal()
     rendererError = pyqtSignal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.logger = logging.getLogger(__name__)
-        self._backend: Any | None = None
-        self._render_context: Any | None = None
-        self._get_proc_address_callback: Any | None = None
-        self._bound_context: QOpenGLContext | None = None
-        self._renderer_generation = 0
-        self._last_framebuffer_size = (0, 0)
-        self._shutting_down = False
-        self._left_press_global: QPoint | None = None
-        self._dragging = False
-        self.setStyleSheet("background: #000000;")
+        # Keep the QMainWindow/central-widget ancestor chain non-native. Only
+        # the render container needs an HWND; otherwise a full-window native
+        # ancestor intercepts WM_NCHITTEST before the top-level custom frame.
+        self.setAttribute(Qt.WidgetAttribute.WA_DontCreateNativeAncestors, True)
+        self.setObjectName("videoSurfaceHost")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setStyleSheet("#videoSurfaceHost { background:#000000; }")
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setMouseTracking(True)
-        self.frameReady.connect(self.update, Qt.ConnectionType.QueuedConnection)
+        # Qt's offscreen test platform cannot safely create dozens of native
+        # QWindows in one process. Windows production always creates the native
+        # render window and embeds it through createWindowContainer().
+        if QGuiApplication.platformName() == "offscreen":
+            self.render_window = _OffscreenRenderStub(self)
+            self.container = QWidget(self)
+        else:
+            self.render_window = MpvRenderWindow()
+            self.container = QWidget.createWindowContainer(self.render_window, self)
+            self.container.setAttribute(
+                Qt.WidgetAttribute.WA_DontCreateNativeAncestors, True
+            )
+        self.container.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.container.setStyleSheet("background:#000000;")
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addWidget(self.container)
+        self._forward_signals()
+
+    def _forward_signals(self) -> None:
+        source = self.render_window
+        source.doubleClicked.connect(self.doubleClicked)
+        source.clicked.connect(self.clicked)
+        source.rightClicked.connect(self.rightClicked)
+        source.middleClicked.connect(self.middleClicked)
+        source.scrolled.connect(self.scrolled)
+        source.mouseMoved.connect(self.mouseMoved)
+        source.mousePositionChanged.connect(self.mousePositionChanged)
+        source.dragStarted.connect(self.dragStarted)
+        source.dragMoved.connect(self.dragMoved)
+        source.dragEnded.connect(self.dragEnded)
+        source.keyPressed.connect(self.keyPressed)
+        source.rendererReady.connect(self.rendererReady)
+        source.rendererDestroyed.connect(self.rendererDestroyed)
+        source.rendererError.connect(self.rendererError)
 
     @property
     def renderer_active(self) -> bool:
-        return self._render_context is not None
+        return self.render_window.renderer_active
 
     @property
     def renderer_generation(self) -> int:
-        return self._renderer_generation
+        return self.render_window.renderer_generation
 
     @property
     def framebuffer_size(self) -> tuple[int, int]:
-        return self._last_framebuffer_size
-
-    def set_backend(self, backend: Any) -> None:
-        """Attach the initialized player core before Qt creates the GL context."""
-        self._backend = backend
-        if self.isValid() and self._render_context is None:
-            self.makeCurrent()
-            try:
-                self._initialize_renderer()
-            finally:
-                self.doneCurrent()
-
-    def initializeGL(self) -> None:
-        context = self.context()
-        if context is not None and context is not self._bound_context:
-            context.aboutToBeDestroyed.connect(
-                self._context_about_to_be_destroyed,
-                Qt.ConnectionType.DirectConnection,
-            )
-            self._bound_context = context
-        self._initialize_renderer()
-
-    def ensure_renderer(self) -> bool:
-        """Recover a renderer if a platform replaced the GL context in a move."""
-        if self._render_context is not None:
-            self.update()
-            return True
-        if self._shutting_down or not self.isValid():
-            return False
-        made_current = False
-        try:
-            self.makeCurrent()
-            made_current = True
-            self._initialize_renderer()
-        finally:
-            if made_current:
-                self.doneCurrent()
-        self.update()
-        return self._render_context is not None
+        return self.render_window.framebuffer_size
 
     def _framebuffer_dimensions(self) -> tuple[int, int]:
-        ratio = self.devicePixelRatioF()
+        ratio = float(self.render_window.devicePixelRatio())
         return (
             max(1, round(self.width() * ratio)),
             max(1, round(self.height() * ratio)),
         )
 
-    def paintGL(self) -> None:
-        if self._render_context is None or self._shutting_down:
-            return
-        width, height = self._framebuffer_dimensions()
-        self._last_framebuffer_size = (width, height)
-        try:
-            self._render_context.render(
-                opengl_fbo={
-                    "fbo": self.defaultFramebufferObject(),
-                    "w": width,
-                    "h": height,
-                },
-                flip_y=True,
-            )
-            self._render_context.report_swap()
-        except Exception as exc:
-            self.logger.warning("mpv frame render failed: %s", exc)
+    def set_backend(self, backend: Any) -> None:
+        engine = getattr(backend, "mpv", None)
+        self.render_window.set_engine(engine if isinstance(engine, MpvEngine) else None)
+
+    def ensure_renderer(self) -> bool:
+        return self.render_window.ensure_renderer()
 
     def shutdown_renderer(self, permanent: bool = True) -> None:
-        """Free mpv GPU resources while Qt's GL context is still valid."""
-        if self._render_context is None:
-            if permanent:
-                self._shutting_down = True
-            return
-        self._shutting_down = permanent
-        try:
-            self._render_context.update_cb = None
-        except Exception:
-            pass
-        made_current = False
-        try:
-            if self.context() is not None and self.context().isValid():
-                self.makeCurrent()
-                made_current = True
-            self._render_context.free()
-        except Exception as exc:
-            self.logger.debug("mpv renderer cleanup ignored: %s", exc)
-        finally:
-            self._render_context = None
-            self.rendererDestroyed.emit()
-            if made_current:
-                self.doneCurrent()
-            if permanent:
-                self._get_proc_address_callback = None
-
-    def _initialize_renderer(self) -> None:
-        if self._render_context is not None or self._shutting_down:
-            return
-        player = getattr(self._backend, "mpv", None)
-        if player is None:
-            return
-        try:
-            from mpv import MpvGlGetProcAddressFn, MpvRenderContext
-
-            self._get_proc_address_callback = MpvGlGetProcAddressFn(self._get_proc_address)
-            self._render_context = MpvRenderContext(
-                player,
-                "opengl",
-                opengl_init_params={"get_proc_address": self._get_proc_address_callback},
-            )
-            self._render_context.update_cb = self._request_frame
-            self._renderer_generation += 1
-            self.rendererReady.emit()
-        except Exception as exc:
-            self._render_context = None
-            self.logger.exception("Could not initialize mpv OpenGL renderer")
-            self.rendererError.emit(f"OpenGL renderer could not start: {exc}")
-
-    def _get_proc_address(self, _context: object, name: bytes) -> int:
-        current = QOpenGLContext.currentContext()
-        if current is None:
-            return 0
-        address = current.getProcAddress(name)
-        return int(address) if address else 0
-
-    def _request_frame(self) -> None:
-        if not self._shutting_down:
-            self.frameReady.emit()
-
-    def _context_about_to_be_destroyed(self) -> None:
-        self.shutdown_renderer(permanent=False)
-        self._bound_context = None
-
-    def resizeGL(self, _width: int, _height: int) -> None:
-        self._last_framebuffer_size = self._framebuffer_dimensions()
-        self.update()
-
-    def mousePressEvent(self, event: QMouseEvent) -> None:
-        self.setFocus()
-        if event.button() == Qt.MouseButton.RightButton:
-            self.rightClicked.emit(event.globalPosition().toPoint())
-        elif event.button() == Qt.MouseButton.MiddleButton:
-            self.middleClicked.emit()
-            event.accept()
-            return
-        elif event.button() == Qt.MouseButton.LeftButton:
-            self._left_press_global = event.globalPosition().toPoint()
-            self._dragging = False
-        super().mousePressEvent(event)
-
-    def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.doubleClicked.emit()
-        super().mouseDoubleClickEvent(event)
-
-    def mouseMoveEvent(self, event: QMouseEvent) -> None:
-        if self._left_press_global is not None and event.buttons() & Qt.MouseButton.LeftButton:
-            current = event.globalPosition().toPoint()
-            if not self._dragging and (current - self._left_press_global).manhattanLength() >= 5:
-                self._dragging = True
-                self.dragStarted.emit(self._left_press_global)
-            if self._dragging:
-                self.dragMoved.emit(current)
-        self.mousePositionChanged.emit(event.position().toPoint())
-        self.mouseMoved.emit()
-        super().mouseMoveEvent(event)
-
-    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
-        if event.button() == Qt.MouseButton.LeftButton and self._left_press_global is not None:
-            if self._dragging:
-                self.dragEnded.emit()
-            else:
-                self.clicked.emit()
-            self._left_press_global = None
-            self._dragging = False
-        super().mouseReleaseEvent(event)
-
-    def wheelEvent(self, event: QWheelEvent) -> None:
-        self.scrolled.emit(5 if event.angleDelta().y() > 0 else -5)
-        event.accept()
-
-    def keyPressEvent(self, event: QKeyEvent) -> None:
-        self.keyPressed.emit(event)
-        event.accept()
+        self.render_window.shutdown_renderer(permanent)

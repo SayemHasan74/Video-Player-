@@ -18,6 +18,13 @@ from PyQt6.QtWidgets import (
 from config.settings import APP_VERSION, SettingsStore, app_data_dir
 from core.keybindings import KeyBindingStore
 from core.media_probe import probe_media
+from core.mpv_properties import (
+    AVSYNC,
+    CONTAINER_FPS,
+    DEMUXER_CACHE_DURATION,
+    DISPLAY_FPS,
+    FRAME_DROP_COUNT,
+)
 from ui.keybindings_editor import KeyBindingsEditor as ProfileKeyBindingsEditor
 from utils.file_utils import is_playlist_file
 from utils.accessibility import system_animations_enabled, transitions_enabled
@@ -290,14 +297,12 @@ class InspectorWindow(QDialog):
         return page
 
     def _update(self) -> None:
-        mpv = self.player.mpv
-        if mpv is None: return
         values = {
-            "Decode FPS": self.player.get_property("container-fps", 0),
-            "Display FPS": self.player.get_property("display-fps", 0),
-            "Dropped frames": self.player.get_property("frame-drop-count", 0),
-            "A/V sync": self.player.get_property("avsync", 0),
-            "Cache": self.player.get_property("demuxer-cache-duration", 0),
+            "Decode FPS": self.player.get_property(CONTAINER_FPS, 0),
+            "Display FPS": self.player.get_property(DISPLAY_FPS, 0),
+            "Dropped frames": self.player.get_property(FRAME_DROP_COUNT, 0),
+            "A/V sync": self.player.get_property(AVSYNC, 0),
+            "Cache": self.player.get_property(DEMUXER_CACHE_DURATION, 0),
         }
         for name, value in values.items(): self.status_values[name].setText(str(value or 0))
         name = self.watch.text().strip()
@@ -323,12 +328,12 @@ class PreferencesWindow(QDialog):
         page = QWidget(); form = QFormLayout(page)
         specs = {
             "General": [("Resume playback", "playback.remember_position", "check"), ("Show welcome", "startup.show_welcome", "check"), ("Reopen last file", "startup.reopen_last", "check"), ("Single-file action (hold Alt to invert new window; Shift queues)", "playback.open_single_behavior", ["replace", "append", "new_window"]), ("Multiple-file action (hold Alt to invert new window; Shift queues)", "playback.open_multiple_behavior", ["replace", "append", "new_window"]), ("Show playlist files in Welcome recents", "startup.show_playlist_recents", "check"), ("Auto-resize on open", "playback.auto_resize", "check"), ("Automatically use Music Mode for audio-only media", "playback.auto_music_mode", "check"), ("Minimize starts PiP for video only", "window.minimize_to_pip_video", "check")],
-            "UI": [("OSC position", "ui.osc_position", ["floating", "top", "bottom"]), ("Always show OSC and top chrome", "ui.osc_always_visible", "check"), ("Enable scroll over OSC seek/volume", "ui.osc_scroll_enabled", "check"), ("Enable scroll over video", "ui.video_scroll_enabled", "check"), ("Drag window from empty video area", "window.drag_from_video", "check"), ("Sidebar side", "ui.sidebar_side", ["left", "right"]), ("Pin Playlist sidebar", "ui.playlist_pinned", "check"), ("Pin Quick Settings opposite", "ui.quick_settings_pinned", "check"), ("Theme", "ui.theme", ["dark", "system"]), ("Animations", "ui.animations", "check"), ("Hide controls while playing", "ui.hide_controls_while_playing", "check"), ("Hide delay (ms)", "ui.osc_hide_delay_ms", "spin"), ("Show OSD", "ui.show_osd", "check"), ("OSD position", "ui.osd_position", ["top", "center", "bottom"]), ("Suppress OSD categories (comma-separated)", "ui.osd_suppressed_categories", "text"), ("Buffering indicator", "ui.buffering_throbber", ["off", "spinner", "text", "both"]), ("Music Mode: show album art/video", "music_mode.show_album_art", "check"), ("Music Mode: expand playlist by default", "music_mode.show_playlist", "check")],
+            "UI": [("OSC position", "ui.osc_position", ["floating", "top", "bottom"]), ("Enable title bar and OSC", "ui.enableTitleBarAndOSC", "check"), ("Hide OSC when cursor leaves the window", "ui.hideOSCWhenCursorIsOutsideWindow", "check"), ("Don't hide cursor in fullscreen while OSC is visible", "ui.dontHideCursorInFullscreenWhileOSCIsVisible", "check"), ("Always show OSC and top chrome", "ui.osc_always_visible", "check"), ("Enable scroll over OSC seek/volume", "ui.osc_scroll_enabled", "check"), ("Enable scroll over video", "ui.video_scroll_enabled", "check"), ("Sidebar side", "ui.sidebar_side", ["left", "right"]), ("Pin Playlist sidebar", "ui.playlist_pinned", "check"), ("Pin Quick Settings opposite", "ui.quick_settings_pinned", "check"), ("Theme", "ui.theme", ["dark", "system"]), ("Disable window animations", "ui.disableWindowAnimation", "check"), ("Hide controls while playing", "ui.hide_controls_while_playing", "check"), ("Hide delay (ms)", "ui.osc_hide_delay_ms", "spin"), ("Show OSD", "ui.show_osd", "check"), ("OSD position", "ui.osd_position", ["top", "center", "bottom"]), ("Suppress OSD categories (comma-separated)", "ui.osd_suppressed_categories", "text"), ("Buffering indicator", "ui.buffering_throbber", ["off", "spinner", "text", "both"]), ("Music Mode: show album art/video", "music_mode.show_album_art", "check"), ("Music Mode: expand playlist by default", "music_mode.show_playlist", "check")],
             "Video/Codec": [
-                ("Hardware decoding", "video.hwdec", ["auto-safe", "auto", "no"]),
+                ("Hardware decoding", "video.hwdec", ["no", "auto", "d3d11va"]),
                 ("Fall back to software decoding", "video.hwdec_fallback", "check"),
                 ("Default aspect", "video.aspect", ["auto", "16:9", "4:3", "21:9"]),
-                ("Lock manual resize to video aspect (hold Alt to bypass)", "video.lock_resize_aspect", "check"),
+                ("Lock manual resize to video aspect", "video.lock_resize_aspect", "check"),
                 ("Output color space (restart required)", "video.color_space", ["srgb", "display-p3"]),
                 ("HDR handling", "video.hdr_mode", ["auto", "sdr", "passthrough"]),
                 ("Tone mapping", "video.tone_mapping", ["auto", "bt.2390", "mobius", "reinhard", "hable", "clip"]),
@@ -350,7 +355,10 @@ class PreferencesWindow(QDialog):
             ],
             "Subtitle": [("Auto-load subtitles", "subtitle.autoload", "check"), ("Exclude embedded subtitles from automatic selection", "subtitle.exclude_embedded_auto", "check"), ("Font", "subtitle.font", "text"), ("Size", "subtitle.size", "spin"), ("Color", "subtitle.color", "text"), ("Outline", "subtitle.outline", "spin"), ("Position", "subtitle.position", "spin"), ("Encoding", "subtitle.encoding", "text")],
             "Network": [("Proxy", "network.proxy", "text"), ("User agent", "network.user_agent", "text"), ("Preferred stream format", "network.preferred_format", "text")],
-            "Advanced": [("Raw mpv options (one key=value per line; restart may be required)", "advanced.mpv_options", "multiline")],
+            "Advanced": [
+                ("mpv log verbosity", "advanced.mpv_loglevel", ["warn", "info", "debug", "trace"]),
+                ("Raw mpv options (one key=value per line; restart may be required)", "advanced.mpv_options", "multiline"),
+            ],
         }.get(name, [])
         if name == "Key Bindings":
             editor=ProfileKeyBindingsEditor(self.keys,str(self.settings.get("keys.profile","Default"))); self.controls["keys.profile"] = editor.profile; form.addRow(editor)

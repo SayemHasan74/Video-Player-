@@ -55,6 +55,9 @@ class TitleBar(QWidget):
         self.title_label.hide()
         self.min_button = self._window_button("minimize", "Minimize")
         self.max_button = self._window_button("maximize", "Maximize")
+        # Windows supplies the Snap Layout hover UI for this hit region. A Qt
+        # tooltip competes with and can suppress that native flyout.
+        self.max_button.setToolTip("")
         self.close_button = self._window_button("close", "Close")
         self.close_button.setStyleSheet(
             "QPushButton { background: transparent; border: none; border-radius: 0; outline: none; padding: 0; } "
@@ -76,7 +79,7 @@ class TitleBar(QWidget):
         self.close_button.clicked.connect(self.closeClicked.emit)
 
     def paintEvent(self, event: object) -> None:
-        """Paint an opaque strip even when composed over QOpenGLWidget."""
+        """Paint an opaque strip above the native video container."""
         painter = QPainter(self)
         painter.fillRect(self.rect(), QColor("#0d0d0d"))
         painter.fillRect(0, max(0, self.height() - 1), self.width(), 1, QColor("#252525"))
@@ -100,8 +103,9 @@ class TitleBar(QWidget):
             self.dragStarted.emit(event.globalPosition().toPoint())
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
-        if self._dragging:
-            self.dragMoved.emit(event.globalPosition().toPoint())
+        # The top-level window starts the OS-native move loop from the press
+        # signal. Never move the frame manually from mouse deltas.
+        super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         self._dragging = False
@@ -109,7 +113,7 @@ class TitleBar(QWidget):
 
     def _window_button(self, icon_name: str, tooltip: str) -> QPushButton:
         button = QPushButton(self)
-        button.setFixedSize(42, 32)
+        button.setFixedSize(42, TITLE_BAR_HEIGHT)
         button.setIcon(svg_icon(icon_name))
         button.setToolTip(tooltip)
         button.setFocusPolicy(Qt.FocusPolicy.NoFocus)

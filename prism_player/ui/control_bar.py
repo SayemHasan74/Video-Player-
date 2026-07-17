@@ -5,6 +5,7 @@ from __future__ import annotations
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QMouseEvent, QResizeEvent
 from PyQt6.QtWidgets import (
+    QApplication,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -16,7 +17,8 @@ from PyQt6.QtWidgets import (
 )
 
 from assets.icons import svg_icon
-from config.settings import CONTROL_BAR_HEIGHT, SPEED_STEPS
+from config.settings import SPEED_STEPS
+from ui.osc_layout_constants import CONTROL_BAR_HEIGHT, FLOATING_OSC_HEIGHT
 from ui.seekbar import SeekBar
 from ui.volume_slider import VolumeWidget
 from utils.time_utils import format_time
@@ -75,10 +77,14 @@ class OscDragHandle(QFrame):
         self.setFixedHeight(7)
         self.setCursor(Qt.CursorShape.SizeVerCursor)
         self._last_y: int | None = None
+        self._press_y: int | None = None
+        self._dragging = False
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
             self._last_y = event.globalPosition().toPoint().y()
+            self._press_y = self._last_y
+            self._dragging = False
             event.accept()
             return
         super().mousePressEvent(event)
@@ -86,6 +92,11 @@ class OscDragHandle(QFrame):
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
         if self._last_y is not None and event.buttons() & Qt.MouseButton.LeftButton:
             y = event.globalPosition().toPoint().y()
+            if not self._dragging:
+                if self._press_y is None or abs(y - self._press_y) < QApplication.startDragDistance():
+                    event.accept()
+                    return
+                self._dragging = True
             self.dragged.emit(y - self._last_y)
             self._last_y = y
             event.accept()
@@ -94,6 +105,8 @@ class OscDragHandle(QFrame):
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         self._last_y = None
+        self._press_y = None
+        self._dragging = False
         super().mouseReleaseEvent(event)
 
 
@@ -283,7 +296,14 @@ class ControlBar(QWidget):
     def set_layout_mode(self, mode: str) -> None:
         mode = mode if mode in {"floating", "top", "bottom"} else "floating"
         self.layout_mode = mode
-        self.setFixedHeight(82 if mode == "floating" else CONTROL_BAR_HEIGHT)
+        self.setFixedHeight(FLOATING_OSC_HEIGHT if mode == "floating" else CONTROL_BAR_HEIGHT)
+        button_size = 36 if mode == "floating" else 24
+        for button in (
+            self.previous_button, self.play_button, self.next_button, self.stop_button,
+            *self._toolbar_buttons.values(),
+        ):
+            button.setFixedSize(button_size, button_size)
+        self.speed_button.setFixedSize(44 if mode == "floating" else 32, button_size)
         self.setObjectName({"floating": "oscFloating", "top": "oscTop", "bottom": "oscBottom"}[mode])
         self._clear_layout(self._root)
         if mode == "floating":

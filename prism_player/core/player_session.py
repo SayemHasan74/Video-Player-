@@ -26,13 +26,27 @@ class PlayerSession(QObject):
         self.playlist = PlaylistManager(self)
         self.player = PlayerBackend(video_widget, self, settings=settings)
         self.media_states = MediaStateStore()
-        self.position = 0.0
-        self.duration = 0.0
         self.loaded_item: PlaylistItem | None = None
         # None follows automatic stream detection; True/False records the
         # user's explicit choice for this running player session.
         self.music_mode_manual_override: bool | None = None
         self._closed = False
+
+    @property
+    def position(self) -> float:
+        return self.player.position
+
+    @position.setter
+    def position(self, value: float) -> None:
+        self.player._position = float(value)
+
+    @property
+    def duration(self) -> float:
+        return self.player.duration
+
+    @duration.setter
+    def duration(self, value: float) -> None:
+        self.player._duration = float(value)
 
     def begin_item(self, item: PlaylistItem) -> float:
         previous = self.loaded_item

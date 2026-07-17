@@ -8,14 +8,18 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
+from ui.osc_layout_constants import (
+    CONTROL_BAR_HEIGHT,
+    MIN_WINDOW_SIZE,
+    QUICK_SETTINGS_PANEL_WIDTH,
+    TITLE_BAR_HEIGHT,
+)
+
 APP_NAME = "Comet V2"
 APP_SHORT_NAME = "Comet V2"
 APP_VERSION = "2.0.0-dev"
 
 DEFAULT_WINDOW_SIZE = (1100, 680)
-MIN_WINDOW_SIZE = (285, 120)
-TITLE_BAR_HEIGHT = 40
-CONTROL_BAR_HEIGHT = 68
 PLAYLIST_PANEL_WIDTH = 280
 PIP_DEFAULT_SIZE = (360, 210)
 PIP_MINIMUM_SIZE = (240, 140)
@@ -102,6 +106,9 @@ def default_settings() -> dict[str, Any]:
             },
             "ui": {
                 "hide_controls_while_playing": True,
+                "enableTitleBarAndOSC": True,
+                "hideOSCWhenCursorIsOutsideWindow": True,
+                "dontHideCursorInFullscreenWhileOSCIsVisible": False,
                 "osc_position": "floating",
                 "osc_hide_delay_ms": 3000,
                 "osc_always_visible": False,
@@ -111,7 +118,7 @@ def default_settings() -> dict[str, Any]:
                 "osc_toolbar": ["playlist", "subtitle", "audio", "screenshot", "ab_loop", "pip", "music", "cover", "fullscreen"],
                 "sidebar_side": "right",
                 "sidebar_width": 320,
-                "quick_settings_width": 320,
+                "quick_settings_width": QUICK_SETTINGS_PANEL_WIDTH,
                 "sidebar_tab": "playlist",
                 "playlist_pinned": False,
                 "quick_settings_pinned": False,
@@ -120,7 +127,7 @@ def default_settings() -> dict[str, Any]:
                 "osd_position": "top",
                 "osd_suppressed_categories": "",
                 "buffering_throbber": "spinner",
-                "animations": True,
+                "disableWindowAnimation": False,
                 "theme": "dark",
             },
             "music_mode": {
@@ -133,7 +140,7 @@ def default_settings() -> dict[str, Any]:
                 "shuffle": False,
             },
             "video": {
-                "hwdec": "auto-safe",
+                "hwdec": "no",
                 "hwdec_fallback": True,
                 "aspect": "auto",
                 "rotation": 0,
@@ -175,7 +182,7 @@ def default_settings() -> dict[str, Any]:
                 "show_playlist_recents": False,
                 "playlist_recents": [],
             },
-            "advanced": {"mpv_options": ""},
+            "advanced": {"mpv_loglevel": "warn", "mpv_options": ""},
             "keys": {"profile": "Default"},
         }
     )

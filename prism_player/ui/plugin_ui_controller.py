@@ -10,6 +10,7 @@ from PyQt6.QtCore import QObject, Qt
 from PyQt6.QtWidgets import QLabel, QWidget
 
 from core.plugin_manager import PluginManager
+from core.mpv_properties import MUTE, SPEED, VOLUME
 from ui.plugin_window import PluginWindow
 from utils.file_utils import is_probable_url
 
@@ -110,6 +111,8 @@ class PluginUiController(QObject):
                 label.setTextFormat(Qt.TextFormat.RichText)
                 label.setWordWrap(True)
                 self.overlay_widgets[key] = label
+                if hasattr(self.window, "native_overlays"):
+                    self.window.native_overlays.register(label)
             label.setProperty("pluginPosition", item.position)
             label.setText(item.html)
             label.setStyleSheet(
@@ -119,7 +122,10 @@ class PluginUiController(QObject):
             label.show()
             label.raise_()
         for key in set(self.overlay_widgets) - active:
-            self.overlay_widgets.pop(key).deleteLater()
+            label = self.overlay_widgets.pop(key)
+            if hasattr(self.window, "native_overlays"):
+                self.window.native_overlays.unregister(label)
+            label.deleteLater()
         self.position_overlays()
 
     def position_overlays(self) -> None:
@@ -130,6 +136,8 @@ class PluginUiController(QObject):
             y = margin if position.startswith("top") else max(margin, height - label.height() - margin) if position.startswith("bottom") else max(margin, (height - label.height()) // 2)
             label.move(x, y)
             label.raise_()
+            if hasattr(self.window, "native_overlays"):
+                self.window.native_overlays.raise_widget(label)
 
     def plugin_player_status(self) -> dict[str, object]:
         window = self.window
@@ -147,9 +155,9 @@ class PluginUiController(QObject):
                 "width": window.width(), "height": window.height(),
             },
             "fullscreen": window.isFullScreen(),
-            "volume": window.player.get_property("volume", 0),
-            "muted": bool(window.player.get_property("mute", False)),
-            "speed": window.player.get_property("speed", 1.0),
+            "volume": window.player.get_property(VOLUME, 0),
+            "muted": bool(window.player.get_property(MUTE, False)),
+            "speed": window.player.get_property(SPEED, 1.0),
             "audio_tracks": list(window.audio_tracks),
             "subtitle_tracks": list(window.subtitle_tracks),
         }

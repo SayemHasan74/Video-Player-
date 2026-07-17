@@ -3,13 +3,89 @@
 from __future__ import annotations
 
 import logging
-import os
 import time
 from pathlib import Path
 from typing import Any
 
-from PyQt6.QtCore import QEventLoop, QObject, QTimer, pyqtSignal
+from PyQt6.QtCore import QEventLoop, QObject, QTimer, Qt, pyqtSignal, pyqtSlot
 
+from core.dll_bootstrap import vendored_mpv_path
+from core.mpv_engine import MpvEngine
+from core.mpv_properties import (
+    AF,
+    AID,
+    ALANG,
+    AUDIO_DELAY,
+    AUDIO_DEVICE,
+    AUDIO_DEVICE_LIST,
+    AVSYNC,
+    BRIGHTNESS,
+    CMD_AUDIO_FILTER,
+    CMD_LOADFILE,
+    CMD_SCREENSHOT_TO_FILE,
+    CMD_SEEK,
+    CMD_STOP,
+    CMD_SUB_ADD,
+    CMD_VIDEO_FILTER,
+    CHAPTER_LIST,
+    CONTAINER_FPS,
+    CONTRAST,
+    DEMUXER_CACHE_DURATION,
+    DEMUXER_CACHE_STATE,
+    DISPLAY_FPS,
+    DURATION,
+    EOF_REACHED,
+    FRAME_DROP_COUNT,
+    GAMMA,
+    GAMUT_MAPPING_MODE,
+    GAPLESS_AUDIO,
+    HDR_COMPUTE_PEAK,
+    HEIGHT,
+    HTTP_PROXY,
+    HUE,
+    HWDEC,
+    HWDEC_CURRENT,
+    ICC_PROFILE,
+    METADATA,
+    MUTE,
+    PATH,
+    PAUSE,
+    PAUSED_FOR_CACHE,
+    CACHE_BUFFERING_STATE,
+    REPLAYGAIN,
+    REPLAYGAIN_CLIP,
+    REPLAYGAIN_FALLBACK,
+    REPLAYGAIN_PREAMP,
+    SATURATION,
+    SECONDARY_SID,
+    SECONDARY_SUB_DELAY,
+    SECONDARY_SUB_VISIBILITY,
+    SEEKING,
+    SID,
+    SPEED,
+    SUB_BORDER_SIZE,
+    SUB_CODEPAGE,
+    SUB_COLOR,
+    SUB_DELAY,
+    SUB_FONT,
+    SUB_FONT_SIZE,
+    SUB_POS,
+    SUB_SHADOW_OFFSET,
+    SUB_VISIBILITY,
+    TARGET_PRIM,
+    TARGET_TRC,
+    TIME_POS,
+    TONE_MAPPING,
+    TRACK_LIST,
+    USER_AGENT,
+    VF,
+    VIDEO_ASPECT_OVERRIDE,
+    VIDEO_PARAMS,
+    VIDEO_ROTATE,
+    VID,
+    VOLUME,
+    WIDTH,
+)
 from core.video_pipeline import VideoPipelineConfig
 from utils.languages import normalize_language_code, normalize_language_preferences
 
@@ -25,6 +101,7 @@ class PlayerBackend(QObject):
     tracksChanged = pyqtSignal(list, list)
     chaptersChanged = pyqtSignal(list)
     bufferingChanged = pyqtSignal(bool)
+    bufferingStateChanged = pyqtSignal(bool, int)
     bufferRangesChanged = pyqtSignal(list)
     fileEnded = pyqtSignal()
     gaplessAdvanced = pyqtSignal(str)
@@ -35,6 +112,104 @@ class PlayerBackend(QObject):
     stateChanged = pyqtSignal(dict)
     filtersChanged = pyqtSignal(list, list)
     mediaInfoChanged = pyqtSignal(dict)
+
+    @property
+    def state(self):
+        """Expose the one authoritative PlayerState cache to controllers."""
+        return self.mpv.state if isinstance(getattr(self, "mpv", None), MpvEngine) else None
+
+    @property
+    def position(self) -> float:
+        return self._position
+
+    @property
+    def duration(self) -> float:
+        return self._duration
+
+    @property
+    def paused(self) -> bool:
+        return self._paused
+
+    @property
+    def _position(self) -> float:
+        state = self.state
+        return float(state.position) if state is not None else float(self.__dict__.get("_compat_position", 0.0))
+
+    @_position.setter
+    def _position(self, value: float) -> None:
+        state = self.state
+        if state is not None:
+            state.set_local(TIME_POS, float(value))
+        else:
+            self.__dict__["_compat_position"] = float(value)
+
+    @property
+    def _duration(self) -> float:
+        state = self.state
+        return float(state.duration) if state is not None else float(self.__dict__.get("_compat_duration", 0.0))
+
+    @_duration.setter
+    def _duration(self, value: float) -> None:
+        state = self.state
+        if state is not None:
+            state.set_local(DURATION, float(value))
+        else:
+            self.__dict__["_compat_duration"] = float(value)
+
+    @property
+    def _paused(self) -> bool:
+        state = self.state
+        return bool(state.paused) if state is not None else bool(self.__dict__.get("_compat_paused", True))
+
+    @_paused.setter
+    def _paused(self, value: bool) -> None:
+        state = self.state
+        if state is not None:
+            state.set_local(PAUSE, bool(value))
+        else:
+            self.__dict__["_compat_paused"] = bool(value)
+
+    @property
+    def _volume(self) -> int:
+        state = self.state
+        fallback = int(self.__dict__.get("_compat_volume", 80))
+        return int(state.get(VOLUME, fallback)) if state is not None else fallback
+
+    @_volume.setter
+    def _volume(self, value: int) -> None:
+        state = self.state
+        if state is not None:
+            state.set_local(VOLUME, int(value))
+        else:
+            self.__dict__["_compat_volume"] = int(value)
+
+    @property
+    def _muted(self) -> bool:
+        state = self.state
+        fallback = bool(self.__dict__.get("_compat_muted", False))
+        return bool(state.get(MUTE, fallback)) if state is not None else fallback
+
+    @_muted.setter
+    def _muted(self, value: bool) -> None:
+        state = self.state
+        if state is not None:
+            state.set_local(MUTE, bool(value))
+        else:
+            self.__dict__["_compat_muted"] = bool(value)
+
+    @property
+    def _speed(self) -> float:
+        state = self.state
+        fallback = float(self.__dict__.get("_compat_speed", 1.0))
+        return float(state.get(SPEED, fallback)) if state is not None else fallback
+
+    @_speed.setter
+    def _speed(self, value: float) -> None:
+        state = self.state
+        if state is not None:
+            state.set_local(SPEED, float(value))
+        else:
+            self.__dict__["_compat_speed"] = float(value)
 
     def __init__(
         self,
@@ -51,12 +226,19 @@ class PlayerBackend(QObject):
         self._duration = 0.0
         self._position = 0.0
         self._paused = True
+        # PlayerState receives the same queued mpv callbacks before this
+        # facade, so its cached value may already equal the callback payload.
+        # Track UI publication independently from the authoritative cache.
+        self._last_emitted_position = 0.0
+        self._last_emitted_duration = 0.0
+        self._last_emitted_pause = True
         self._pause_command_deadline = 0.0
         self._volume = int(settings.get("playback.volume", 80)) if settings is not None else 80
         self._muted = bool(settings.get("playback.muted", False)) if settings is not None else False
         self._speed = float(settings.get("playback.speed", 1.0)) if settings is not None else 1.0
         self._ended_emitted = False
         self._buffering = False
+        self._buffering_percent = 0
         self._buffer_ranges: tuple[tuple[float, float], ...] = ()
         self._last_track_signature: tuple = ()
         self._last_state: dict[str, Any] = {}
@@ -70,20 +252,19 @@ class PlayerBackend(QObject):
         self._video_pipeline = VideoPipelineConfig.from_settings(settings) if settings is not None else VideoPipelineConfig()
         self._video_widget = video_widget
         self._load_mpv()
+        self._wire_mpv_signals()
         if video_widget is not None and hasattr(video_widget, "set_backend"):
             video_widget.rendererReady.connect(self.rendererReady)
             video_widget.rendererError.connect(self.error)
             video_widget.set_backend(self)
         self.poll_timer = QTimer(self)
         self.poll_timer.setInterval(250)
-        self.poll_timer.timeout.connect(self._poll_state)
-        self.poll_timer.start()
 
     @staticmethod
     def mpv_dll_exists(base_dir: Path) -> bool:
-        """Return True if mpv is beside the app or available to Windows loader."""
-        candidates = [base_dir, base_dir.parent, *[Path(entry) for entry in os.environ.get("PATH", "").split(os.pathsep) if entry]]
-        return any((directory / "mpv-2.dll").exists() or (directory / "libmpv-2.dll").exists() for directory in candidates)
+        """Return True only for the deliberately vendored DLL."""
+        del base_dir
+        return vendored_mpv_path().is_file()
 
     def load(self, source: str, start_position: float = 0.0) -> None:
         """Load a file path or URL into mpv."""
@@ -99,14 +280,19 @@ class PlayerBackend(QObject):
             # the seek bar reject input because MainWindow had reset its copy.
             self._position = 0.0
             self._duration = 0.0
+            self._last_emitted_position = 0.0
+            self._last_emitted_duration = 0.0
             self.timeChanged.emit(0.0)
             self.durationChanged.emit(0.0)
             self._buffer_ranges = ()
             self.bufferRangesChanged.emit([])
+            self._buffering = False
+            self._buffering_percent = 0
+            self.bufferingStateChanged.emit(False, 0)
             self.stopped.emit()
             self._queued_gapless_source = ""
             self._gapless_transition_source = ""
-            self.mpv.command("loadfile", source, "replace")
+            self.mpv.command(CMD_LOADFILE, source, "replace")
             if self._exclude_embedded_subtitle_auto:
                 # Apply immediately after the file-local track state exists;
                 # explicitly loaded external tracks can still select themselves.
@@ -132,6 +318,7 @@ class PlayerBackend(QObject):
             return
         self.mpv.pause = paused
         self._paused = paused
+        self._last_emitted_pause = paused
         self._pause_command_deadline = time.monotonic() + 0.5
         self.pauseStateChanged.emit(paused)
 
@@ -140,28 +327,32 @@ class PlayerBackend(QObject):
         if self.mpv is None:
             return
         try:
-            self.mpv.command("stop")
+            self.mpv.command(CMD_STOP)
         finally:
             self.is_loaded = False
             self.current_source = ""
             self._position = 0.0
+            self._last_emitted_position = 0.0
             self._ended_emitted = False
             self.timeChanged.emit(0.0)
             self._buffer_ranges = ()
             self.bufferRangesChanged.emit([])
+            self._buffering = False
+            self._buffering_percent = 0
+            self.bufferingStateChanged.emit(False, 0)
 
     def seek_relative(self, delta: float) -> None:
         """Seek relative seconds."""
         if self.is_loaded and self.mpv is not None:
             self._last_preview_seek = None
-            self.mpv.command("seek", delta, "relative")
+            self.mpv.command(CMD_SEEK, delta, "relative")
 
     def seek_preview(self, seconds: float) -> None:
         """Jump quickly to a nearby keyframe while the user is scrubbing."""
         if self.is_loaded and self.mpv is not None:
             target = max(0.0, float(seconds))
             self._last_preview_seek = target
-            self.mpv.command("seek", target, "absolute+keyframes")
+            self.mpv.command(CMD_SEEK, target, "absolute+keyframes")
 
     def complete_ui_seek(self, seconds: float) -> None:
         """Finish scrubbing without a second decoder stall during playback.
@@ -188,7 +379,7 @@ class PlayerBackend(QObject):
         """Seek to absolute seconds."""
         if self.is_loaded and self.mpv is not None:
             self._last_preview_seek = None
-            self.mpv.command("seek", max(0.0, float(seconds)), "absolute+exact")
+            self.mpv.command(CMD_SEEK, max(0.0, float(seconds)), "absolute+exact")
 
     def set_volume(self, volume: int) -> None:
         """Set volume."""
@@ -222,6 +413,13 @@ class PlayerBackend(QObject):
         self.mpv.speed = self._speed
         self.speedChanged.emit(self._speed)
 
+    def set_loglevel(self, level: str) -> str:
+        """Apply the Preferences → Advanced mpv verbosity setting."""
+        resolved = level if level in {"warn", "info", "debug", "trace"} else "warn"
+        if isinstance(self.mpv, MpvEngine):
+            self.mpv.set_loglevel(resolved)
+        return resolved
+
     def set_cover_mode(self, enabled: bool) -> None:
         """Crop video so fullscreen can cover the whole screen."""
         if self.mpv is not None:
@@ -250,7 +448,12 @@ class PlayerBackend(QObject):
         """Set an arbitrary live mpv property from reactive settings panels."""
         if self.mpv is not None:
             try:
-                self.mpv._set_property(name, value)
+                if isinstance(self.mpv, MpvEngine):
+                    self.mpv.set_property(name, value)
+                elif isinstance(getattr(self.mpv, "properties", None), dict):
+                    self.mpv.properties[name] = value
+                else:
+                    setattr(self.mpv, name.replace("-", "_"), value)
                 self._last_state[name] = value
                 self.stateChanged.emit(dict(self._last_state))
                 return True
@@ -261,11 +464,11 @@ class PlayerBackend(QObject):
 
     def set_audio_delay(self, seconds: float) -> bool:
         """Apply signed A/V delay without truthiness or unsigned coercion."""
-        return self.set_property("audio-delay", max(-100.0, min(100.0, float(seconds))))
+        return self.set_property(AUDIO_DELAY, max(-100.0, min(100.0, float(seconds))))
 
     def audio_devices(self) -> list[dict[str, str]]:
         """Return mpv's discovered device IDs with human-readable labels."""
-        raw = self.get_property("audio-device-list", []) or []
+        raw = self.get_property(AUDIO_DEVICE_LIST, []) or []
         devices: list[dict[str, str]] = [{"name": "auto", "description": "System default"}]
         seen = {"auto"}
         for entry in raw if isinstance(raw, list) else []:
@@ -285,7 +488,7 @@ class PlayerBackend(QObject):
         applied = requested if requested == "auto" or requested in known else "auto"
         if applied != requested:
             self.error.emit("The selected audio device is unavailable; using the system default")
-        self.set_property("audio-device", applied)
+        self.set_property(AUDIO_DEVICE, applied)
         return applied
 
     def configure_audio(
@@ -308,14 +511,14 @@ class PlayerBackend(QObject):
         if gapless_mode not in {"no", "weak", "yes"}:
             gapless_mode = "weak"
         properties = {
-            "replaygain": replaygain,
-            "replaygain-preamp": max(-15.0, min(15.0, float(replaygain_preamp))),
-            "replaygain-clip": "yes" if replaygain_clip else "no",
-            "replaygain-fallback": max(-15.0, min(15.0, float(replaygain_fallback))),
+            REPLAYGAIN: replaygain,
+            REPLAYGAIN_PREAMP: max(-15.0, min(15.0, float(replaygain_preamp))),
+            REPLAYGAIN_CLIP: "yes" if replaygain_clip else "no",
+            REPLAYGAIN_FALLBACK: max(-15.0, min(15.0, float(replaygain_fallback))),
         }
         normalized_languages = normalize_language_preferences(languages)
         if normalized_languages:
-            properties["alang"] = normalized_languages
+            properties[ALANG] = normalized_languages
         for name, value in properties.items():
             self.set_property(name, value)
         self.set_gapless_mode(gapless_mode)
@@ -329,19 +532,35 @@ class PlayerBackend(QObject):
         if normalized not in {"no", "weak", "yes"}:
             normalized = "weak"
         self._gapless_mode = normalized
-        self.set_property("gapless-audio", normalized)
+        self.set_property(GAPLESS_AUDIO, normalized)
         return normalized
 
     def configure_video_pipeline(self, config: VideoPipelineConfig) -> VideoPipelineConfig:
         """Apply validated color output and fall back to software decoding."""
         self._video_pipeline = config.validated()
         for name, value in self._video_pipeline.mpv_properties().items():
-            if name == "hwdec":
+            if name == HWDEC:
                 continue
             self.set_property(name, value)
-        if not self.set_property("hwdec", self._video_pipeline.hwdec) and self._video_pipeline.hwdec_fallback:
-            self.set_property("hwdec", "no")
+        self.set_hwdec(self._video_pipeline.hwdec)
         return self._video_pipeline
+
+    def set_hwdec(self, method: str | None) -> str:
+        """Apply the prompt's resolved Windows hwdec branch."""
+        if self.mpv is None:
+            return "no"
+        try:
+            if isinstance(self.mpv, MpvEngine):
+                return self.mpv.set_hwdec(method)
+            resolved = "no" if not method or method == "no" else ("d3d11va" if method == "d3d11va" else "auto")
+            if not self.set_property(HWDEC, resolved):
+                raise RuntimeError("hardware decoder property rejected")
+            return resolved
+        except Exception as exc:
+            self.logger.warning("Could not set hardware decoding: %s", exc)
+            if self._video_pipeline.hwdec_fallback:
+                self.set_property(HWDEC, "no")
+            return "no"
 
     @staticmethod
     def _source_key(source: str) -> str:
@@ -363,7 +582,7 @@ class PlayerBackend(QObject):
         if self._source_key(source) == self._source_key(self.current_source):
             return False
         try:
-            self.mpv.command("loadfile", source, "append")
+            self.mpv.command(CMD_LOADFILE, source, "append")
             self._queued_gapless_source = source
             return True
         except Exception as exc:
@@ -381,7 +600,16 @@ class PlayerBackend(QObject):
         if self.mpv is None:
             return fallback
         try:
-            value = self.mpv._get_property(name)
+            if isinstance(self.mpv, MpvEngine):
+                value = self.mpv.get_property(name, fallback)
+            elif name == TRACK_LIST:
+                value = getattr(self.mpv, "track_list", fallback)
+            elif name == CHAPTER_LIST:
+                value = getattr(self.mpv, "chapter_list", fallback)
+            elif isinstance(getattr(self.mpv, "properties", None), dict):
+                value = self.mpv.properties.get(name, fallback)
+            else:
+                value = getattr(self.mpv, name.replace("-", "_"), fallback)
             return fallback if value is None else value
         except Exception:
             return fallback
@@ -389,7 +617,7 @@ class PlayerBackend(QObject):
     def add_filter(self, kind: str, value: str) -> None:
         if self.mpv is not None:
             try:
-                self.mpv.command("vf" if kind == "video" else "af", "add", value)
+                self.mpv.command(CMD_VIDEO_FILTER if kind == "video" else CMD_AUDIO_FILTER, "add", value)
                 self._emit_filters()
             except Exception as exc:
                 self.error.emit(f"Filter failed: {exc}")
@@ -397,7 +625,7 @@ class PlayerBackend(QObject):
     def remove_filter(self, kind: str, value: str) -> None:
         if self.mpv is not None:
             try:
-                self.mpv.command("vf" if kind == "video" else "af", "remove", value)
+                self.mpv.command(CMD_VIDEO_FILTER if kind == "video" else CMD_AUDIO_FILTER, "remove", value)
                 self._emit_filters()
             except Exception as exc:
                 self.error.emit(f"Could not remove filter: {exc}")
@@ -406,7 +634,7 @@ class PlayerBackend(QObject):
         """Replace one application-owned labelled filter without touching user filters."""
         if self.mpv is None:
             return
-        command = "vf" if kind == "video" else "af"
+        command = CMD_VIDEO_FILTER if kind == "video" else CMD_AUDIO_FILTER
         try:
             self.mpv.command(command, "remove", f"@{label}")
         except Exception:
@@ -422,8 +650,8 @@ class PlayerBackend(QObject):
         """Load external subtitle."""
         if self.mpv is not None and self.is_loaded:
             try:
-                primary_before = self.get_property("sid", "no")
-                track_id = self.mpv.command("sub-add", str(path), "auto" if secondary or not select else "select")
+                primary_before = self.get_property(SID, "no")
+                track_id = self.mpv.command(CMD_SUB_ADD, str(path), "auto" if secondary or not select else "select")
                 if track_id in (None, False, "no"):
                     resolved = str(path.resolve())
                     matches = [
@@ -450,7 +678,7 @@ class PlayerBackend(QObject):
         if self.mpv is None or not self.is_loaded:
             return False
         try:
-            self.mpv.command("screenshot-to-file", str(output), "video")
+            self.mpv.command(CMD_SCREENSHOT_TO_FILE, str(output), "video")
             return True
         except Exception as exc:
             self.logger.warning("Screenshot failed: %s", exc)
@@ -469,7 +697,7 @@ class PlayerBackend(QObject):
         if self.mpv is not None:
             try:
                 if self.is_loaded:
-                    self.mpv.command("stop")
+                    self.mpv.command(CMD_STOP)
                     self._settle_shutdown(100)
                 if self._video_widget is not None and hasattr(self._video_widget, "shutdown_renderer"):
                     self._video_widget.shutdown_renderer()
@@ -488,53 +716,12 @@ class PlayerBackend(QObject):
         loop.exec()
 
     def _load_mpv(self) -> None:
-        """Import python-mpv after the entry-point bootstrap and create it."""
+        """Create the sole mpv owner after the entry point imported python-mpv."""
         try:
-            from mpv import MPV
+            self.mpv = MpvEngine(settings=self.settings, parent=self)
         except Exception as exc:
-            self.logger.warning("python-mpv import failed: %s", exc)
+            self.logger.warning("mpv engine initialization failed: %s", exc)
             self.mpv = None
-            return
-
-        base_kwargs: dict[str, Any] = {
-            "title": "Comet Player",
-            "force_media_title": "Comet Player",
-            "border": False,
-            "force_window": False,
-            "input_default_bindings": False,
-            "input_vo_keyboard": False,
-            "osc": False,
-            # Music Mode decodes tag bytes itself.  This avoids libmpv/ffmpeg
-            # failures on common APIC tags whose MIME label is wrong.
-            "audio_display": "no",
-            "audio_fallback_to_null": True,
-            "keep_open": True,
-            "sub_auto": "no",
-            "ytdl": False,
-            "hwdec": self._video_pipeline.hwdec,
-            "vo": "libmpv",
-            "demuxer_max_bytes": "512MiB",
-            "demuxer_max_back_bytes": "128MiB",
-            "vd_lavc_threads": 0,
-            # Exact seeks may still decode from the previous keyframe, but
-            # dropping intermediate frames makes the final landing much faster.
-            "hr_seek_framedrop": True,
-            "log_handler": self._mpv_log,
-        }
-        profile_modes = [self._video_pipeline.hwdec]
-        if self._video_pipeline.hwdec_fallback:
-            profile_modes.extend(["auto-safe", "no"])
-        profiles = tuple({"hwdec": mode} for index, mode in enumerate(profile_modes) if mode not in profile_modes[:index])
-        last_error: Exception | None = None
-        for profile in profiles:
-            try:
-                self.mpv = MPV(**{**base_kwargs, **profile})
-                break
-            except Exception as exc:
-                last_error = exc
-                self.logger.warning("mpv startup profile failed: %s", exc)
-        if self.mpv is None:
-            self.logger.error("mpv could not start: %s", last_error)
             return
         self.mpv.volume = self._volume
         self.mpv.mute = self._muted
@@ -542,22 +729,91 @@ class PlayerBackend(QObject):
         self.mpv.pause = True
         self.mpv.panscan = 0.0
 
+    def _wire_mpv_signals(self) -> None:
+        if not isinstance(self.mpv, MpvEngine):
+            return
+        queued = Qt.ConnectionType.QueuedConnection
+        self.mpv.signals.position_changed.connect(self._on_position_changed, queued)
+        self.mpv.signals.duration_changed.connect(self._on_duration_changed, queued)
+        self.mpv.signals.pause_changed.connect(self._on_pause_changed, queued)
+        self.mpv.signals.file_loaded.connect(self._on_file_loaded, queued)
+        self.mpv.signals.property_changed.connect(self._on_property_changed, queued)
+        self.mpv.signals.mpv_shutdown.connect(self._on_mpv_shutdown, queued)
+        self.mpv.signals.log_message.connect(self._on_mpv_log, queued)
+
+    @pyqtSlot(float)
+    def _on_position_changed(self, position: float) -> None:
+        position = float(position)
+        self._position = position
+        if abs(position - self._last_emitted_position) > 0.01:
+            self._last_emitted_position = position
+            self.timeChanged.emit(position)
+
+    @pyqtSlot(float)
+    def _on_duration_changed(self, duration: float) -> None:
+        duration = float(duration)
+        self._duration = duration
+        if abs(duration - self._last_emitted_duration) > 0.01:
+            self._last_emitted_duration = duration
+            self.durationChanged.emit(duration)
+
+    @pyqtSlot(bool)
+    def _on_pause_changed(self, paused: bool) -> None:
+        if time.monotonic() < self._pause_command_deadline:
+            paused = self._paused
+        paused = bool(paused)
+        self._paused = paused
+        if paused != self._last_emitted_pause:
+            self._last_emitted_pause = paused
+            self.pauseStateChanged.emit(paused)
+
+    @pyqtSlot()
+    def _on_file_loaded(self) -> None:
+        self._emit_tracks()
+        self._emit_chapters()
+        self._emit_media_info()
+
+    @pyqtSlot(str, object)
+    def _on_property_changed(self, _name: str, _value: object) -> None:
+        self._poll_state()
+
+    @pyqtSlot()
+    def _on_mpv_shutdown(self) -> None:
+        self.is_loaded = False
+
+    @pyqtSlot(str, str)
+    def _on_mpv_log(self, level: str, message: str) -> None:
+        target = self.logger.warning if level in {"warn", "error", "fatal"} else self.logger.debug
+        target("mpv %s: %s", level, message)
+
     def _poll_state(self) -> None:
-        """Poll mpv properties and emit changes."""
+        """Refresh derived UI state from the main-thread PlayerState cache."""
         if self.mpv is None:
             return
         try:
-            position = float(self.mpv.time_pos or 0.0)
-            duration = float(self.mpv.duration or 0.0)
-            paused = bool(self.mpv.pause)
+            position = float(self.get_property(TIME_POS, self._position) or 0.0)
+            duration = float(self.get_property(DURATION, self._duration) or 0.0)
+            paused = bool(self.get_property(PAUSE, self._paused))
             if time.monotonic() < self._pause_command_deadline:
                 paused = self._paused
-            paused_for_cache = bool(self.get_property("paused-for-cache", getattr(self.mpv, "paused_for_cache", False)))
-            seeking = bool(self.get_property("seeking", False))
+            paused_for_cache = bool(self.get_property(PAUSED_FOR_CACHE, False))
+            seeking = bool(self.get_property(SEEKING, False))
             buffering = self.is_loaded and paused_for_cache and not seeking
-            if buffering != self._buffering:
+            try:
+                buffering_percent = max(
+                    0,
+                    min(100, round(float(self.get_property(CACHE_BUFFERING_STATE, 0) or 0))),
+                )
+            except (TypeError, ValueError):
+                buffering_percent = 0
+            buffering_changed = buffering != self._buffering
+            percent_changed = buffering_percent != self._buffering_percent
+            if buffering_changed:
                 self._buffering = buffering; self.bufferingChanged.emit(buffering)
-            cache_state = self.get_property("demuxer-cache-state", {}) or {}
+            self._buffering_percent = buffering_percent
+            if buffering_changed or percent_changed:
+                self.bufferingStateChanged.emit(buffering, buffering_percent)
+            cache_state = self.get_property(DEMUXER_CACHE_STATE, {}) or {}
             raw_ranges = cache_state.get("seekable-ranges", []) if isinstance(cache_state, dict) else []
             ranges: list[tuple[float, float]] = []
             for item in raw_ranges:
@@ -571,16 +827,19 @@ class PlayerBackend(QObject):
             if signature != self._buffer_ranges:
                 self._buffer_ranges = signature
                 self.bufferRangesChanged.emit(list(signature))
-            if abs(position - self._position) > 0.1:
+            if abs(position - self._last_emitted_position) > 0.1:
                 self._position = position
+                self._last_emitted_position = position
                 self.timeChanged.emit(position)
-            if abs(duration - self._duration) > 0.1:
+            if abs(duration - self._last_emitted_duration) > 0.1:
                 self._duration = duration
+                self._last_emitted_duration = duration
                 self.durationChanged.emit(duration)
-            if paused != self._paused:
+            if paused != self._last_emitted_pause:
                 self._paused = paused
+                self._last_emitted_pause = paused
                 self.pauseStateChanged.emit(paused)
-            actual_source = str(self.get_property("path", "") or "")
+            actual_source = str(self.get_property(PATH, "") or "")
             if (
                 actual_source
                 and self._queued_gapless_source
@@ -597,7 +856,7 @@ class PlayerBackend(QObject):
             self._emit_media_info()
             self._emit_reactive_state()
             self._emit_filters()
-            reached_eof = bool(self.get_property("eof-reached", False))
+            reached_eof = bool(self.get_property(EOF_REACHED, False))
             if self.is_loaded and reached_eof and not self._ended_emitted:
                 self._ended_emitted = True
                 self.fileEnded.emit()
@@ -606,7 +865,7 @@ class PlayerBackend(QObject):
 
     def _emit_tracks(self) -> None:
         """Emit current audio/subtitle tracks."""
-        track_list = getattr(self.mpv, "track_list", None) or []
+        track_list = self.get_property(TRACK_LIST, []) or []
         audio_tracks = []
         subtitle_tracks = []
         for track in track_list:
@@ -625,7 +884,7 @@ class PlayerBackend(QObject):
 
     def _emit_media_info(self) -> None:
         """Publish stream-kind and tag metadata for reactive player layouts."""
-        track_list = getattr(self.mpv, "track_list", None) or []
+        track_list = self.get_property(TRACK_LIST, []) or []
         video_tracks = [track for track in track_list if track.get("type") == "video"]
         audio_tracks = [track for track in track_list if track.get("type") == "audio"]
         has_album_art = any(bool(track.get("albumart") or track.get("image")) for track in video_tracks)
@@ -634,15 +893,15 @@ class PlayerBackend(QObject):
             (track for track in video_tracks if not bool(track.get("albumart") or track.get("image"))),
             {},
         )
-        video_params = self.get_property("video-params", {}) or {}
+        video_params = self.get_property(VIDEO_PARAMS, {}) or {}
         if not isinstance(video_params, dict):
             video_params = {}
         video_width = int(
-            self.get_property("width", 0)
+            self.get_property(WIDTH, 0)
             or video_track.get("demux-w") or video_track.get("w") or video_params.get("w") or 0
         )
         video_height = int(
-            self.get_property("height", 0)
+            self.get_property(HEIGHT, 0)
             or video_track.get("demux-h") or video_track.get("h") or video_params.get("h") or 0
         )
         album_art_id = next(
@@ -653,7 +912,7 @@ class PlayerBackend(QObject):
             ),
             None,
         )
-        raw_metadata = self.get_property("metadata", {}) or {}
+        raw_metadata = self.get_property(METADATA, {}) or {}
         if not isinstance(raw_metadata, dict):
             raw_metadata = {}
         metadata = {str(key).casefold(): value for key, value in raw_metadata.items()}
@@ -679,7 +938,7 @@ class PlayerBackend(QObject):
             "is_wide_gamut": primaries.casefold() in {"bt.2020", "display-p3", "dci-p3"},
             "output_color_space": self._video_pipeline.color_space,
             "hdr_mode": self._video_pipeline.hdr_mode,
-            "hwdec_current": str(self.get_property("hwdec-current", "") or ""),
+            "hwdec_current": str(self.get_property(HWDEC_CURRENT, "") or ""),
             "audio_codec": audio_codec,
             "audio_language": normalize_language_code(selected_audio.get("lang")),
             "is_dsd": source_suffix in {".dsd", ".dsf", ".dff"} or "dsd" in audio_codec.casefold(),
@@ -695,15 +954,15 @@ class PlayerBackend(QObject):
 
     def _emit_reactive_state(self) -> None:
         properties = (
-            "aid", "sid", "secondary-sid", "speed", "volume", "hwdec",
-            "video-aspect-override", "video-rotate", "brightness", "contrast",
-            "saturation", "gamma", "hue", "audio-delay", "sub-delay",
-            "secondary-sub-delay", "sub-visibility", "secondary-sub-visibility",
-            "sub-font", "sub-font-size", "sub-color", "sub-border-size",
-            "sub-shadow-offset", "sub-pos", "sub-codepage",
-            "replaygain", "replaygain-preamp", "replaygain-clip",
-            "gapless-audio", "audio-device", "alang",
-            "target-prim", "target-trc", "tone-mapping", "gamut-mapping-mode",
+            AID, SID, SECONDARY_SID, SPEED, VOLUME, HWDEC,
+            VIDEO_ASPECT_OVERRIDE, VIDEO_ROTATE, BRIGHTNESS, CONTRAST,
+            SATURATION, GAMMA, HUE, AUDIO_DELAY, SUB_DELAY,
+            SECONDARY_SUB_DELAY, SUB_VISIBILITY, SECONDARY_SUB_VISIBILITY,
+            SUB_FONT, SUB_FONT_SIZE, SUB_COLOR, SUB_BORDER_SIZE,
+            SUB_SHADOW_OFFSET, SUB_POS, SUB_CODEPAGE,
+            REPLAYGAIN, REPLAYGAIN_PREAMP, REPLAYGAIN_CLIP,
+            GAPLESS_AUDIO, AUDIO_DEVICE, ALANG,
+            TARGET_PRIM, TARGET_TRC, TONE_MAPPING, GAMUT_MAPPING_MODE,
         )
         state = {name: self.get_property(name) for name in properties}
         state = {name: value for name, value in state.items() if value is not None}
@@ -712,8 +971,8 @@ class PlayerBackend(QObject):
             self.stateChanged.emit(dict(state))
 
     def _emit_filters(self) -> None:
-        video = self.get_property("vf", []) or []
-        audio = self.get_property("af", []) or []
+        video = self.get_property(VF, []) or []
+        audio = self.get_property(AF, []) or []
         signature = (repr(video), repr(audio))
         if signature != self._last_filter_signature:
             self._last_filter_signature = signature
@@ -721,9 +980,5 @@ class PlayerBackend(QObject):
 
     def _emit_chapters(self) -> None:
         if self.mpv is None: return
-        try: self.chaptersChanged.emit(getattr(self.mpv, "chapter_list", None) or [])
+        try: self.chaptersChanged.emit(self.get_property(CHAPTER_LIST, []) or [])
         except Exception: self.chaptersChanged.emit([])
-
-    def _mpv_log(self, level: str, prefix: str, text: str) -> None:
-        """Forward mpv logs."""
-        self.logger.debug("mpv %s %s: %s", level, prefix, text.rstrip())

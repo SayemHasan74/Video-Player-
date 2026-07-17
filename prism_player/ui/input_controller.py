@@ -54,6 +54,14 @@ class PlayerInputController(QObject):
             return True
         if event.type() == QEvent.Type.KeyPress and not event.isAutoRepeat():
             if event.key() == Qt.Key.Key_Escape and self._player_can_receive_input():
+                modes = getattr(window, "window_modes", None)
+                fullscreen_state = getattr(modes, "fullscreen_state", None)
+                is_fullscreen = bool(getattr(window, "isFullScreen", lambda: False)())
+                if is_fullscreen or getattr(fullscreen_state, "name", "WINDOWED") != "WINDOWED":
+                    modes.exit_fullscreen()
+                    self._dispatch_plugin_input(watched, event, "after")
+                    event.accept()
+                    return True
                 if window.osd.dismiss():
                     event.accept()
                     return True
@@ -180,7 +188,12 @@ class PlayerInputController(QObject):
         elif key == Qt.Key.Key_C:
             self._trigger("cover", window._toggle_cover_mode)
         elif key == Qt.Key.Key_Escape:
-            if not window.osd.dismiss():
+            modes = getattr(window, "window_modes", None)
+            fullscreen_state = getattr(modes, "fullscreen_state", None)
+            is_fullscreen = bool(getattr(window, "isFullScreen", lambda: False)())
+            if is_fullscreen or getattr(fullscreen_state, "name", "WINDOWED") != "WINDOWED":
+                modes.exit_fullscreen()
+            elif not window.osd.dismiss():
                 window._pause_and_minimize()
         elif key == Qt.Key.Key_P:
             window._toggle_playlist()

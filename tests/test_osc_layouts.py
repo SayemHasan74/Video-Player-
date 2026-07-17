@@ -15,7 +15,7 @@ PACKAGE = ROOT / "prism_player"
 if str(PACKAGE) not in sys.path:
     sys.path.insert(0, str(PACKAGE))
 
-from PyQt6.QtCore import QPoint, QPointF, Qt
+from PyQt6.QtCore import QPoint, QPointF, QRect, Qt
 from PyQt6.QtGui import QWheelEvent
 from PyQt6.QtTest import QSignalSpy
 from PyQt6.QtWidgets import QApplication
@@ -26,6 +26,7 @@ from core.player_backend import PlayerBackend
 from ui.control_bar import ControlBar
 from ui.main_window import MainWindow
 from ui.osc_toolbar_editor import OscToolbarEditor
+from ui.osc_layout_constants import APP_MENU_HEIGHT, TITLE_BAR_HEIGHT, TOP_OSC_MARGIN_NORMAL
 
 
 APP = QApplication.instance() or QApplication([])
@@ -129,21 +130,28 @@ class OscLayoutTests(unittest.TestCase):
             floating = window.control_bar.geometry()
             self.assertGreater(floating.x(), 0)
             self.assertLess(floating.width(), shell.width())
-            self.assertEqual(window.video.geometry(), shell)
+            expected_video = shell
+            self.assertEqual(window.video.geometry(), expected_video)
             old_y = floating.y()
             window.overlays.move_floating(-25)
             self.assertLess(window.control_bar.y(), old_y)
 
             window.settings.set("ui.osc_position", "top")
             window._apply_ui_preferences()
-            self.assertEqual(window.control_bar.y(), 72)
-            self.assertEqual(window.video.geometry(), shell)
+            self.assertEqual(
+                window.control_bar.y(),
+                TOP_OSC_MARGIN_NORMAL,
+            )
+            self.assertEqual(window.video.geometry(), expected_video)
 
             window.settings.set("ui.osc_position", "bottom")
             window._chrome_visible = True
             window._apply_ui_preferences()
             visible_video = window.video.geometry()
-            self.assertEqual(visible_video.height(), shell.height() - window.control_bar.height())
+            self.assertEqual(
+                visible_video.height(),
+                shell.height() - window.control_bar.height(),
+            )
             window._chrome_visible = False
             window.overlays.position()
             self.assertEqual(window.video.geometry(), visible_video)

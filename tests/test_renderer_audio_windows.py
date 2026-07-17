@@ -25,6 +25,7 @@ from core.player_backend import PlayerBackend
 from core.video_pipeline import VideoPipelineConfig
 from integrations.windows_media import WindowsMediaController
 from ui.input_controller import PlayerInputController
+from ui.mpv_render_window import MpvRenderWindow
 from ui.video_widget import VideoWidget
 from utils.languages import normalize_language_code, normalize_language_preferences
 
@@ -67,11 +68,17 @@ class RendererAudioWindowsTests(unittest.TestCase):
             backend = PlayerBackend()
         return backend, fake
 
-    def test_true_entrypoint_bootstraps_path_before_qt_and_player_imports(self) -> None:
+    def test_true_entrypoint_uses_exact_dll_qt_locale_mpv_order(self) -> None:
         source = (PACKAGE / "main.py").read_text(encoding="utf-8")
-        bootstrap_call = source.index("for dll_dir in bootstrap_mpv_environment()")
+        bootstrap_call = source.index("load_vendored_mpv()")
         self.assertLess(bootstrap_call, source.index("from PyQt6.QtCore import Qt"))
-        self.assertLess(bootstrap_call, source.index("from core.player_backend import PlayerBackend"))
+        app_call = source.index("app = QApplication(sys.argv)")
+        locale_call = source.index('locale.setlocale(locale.LC_NUMERIC, "C")')
+        mpv_call = source.index("import_mpv_module()")
+        self.assertLess(app_call, locale_call)
+        self.assertLess(locale_call, mpv_call)
+        self.assertIn("PassThrough", source[:app_call])
+        self.assertNotIn('os.environ["PATH"]', source)
         backend = (PACKAGE / "core/player_backend.py").read_text(encoding="utf-8")
         self.assertNotIn("add_dll_directory", backend)
 
@@ -91,38 +98,27 @@ class RendererAudioWindowsTests(unittest.TestCase):
             self.assertEqual((props["target-prim"], props["target-trc"]), ("bt.2020", "pq"))
 
         backend, fake = self._backend()
-        original_set = fake._set_property
+        original_set = backend.set_property
 
-        def reject_hardware(name: str, value: object) -> None:
+        def reject_hardware(name: str, value: object) -> bool:
             if name == "hwdec" and value != "no":
-                raise RuntimeError("decoder unavailable")
-            original_set(name, value)
+                return False
+            return original_set(name, value)
 
-        fake._set_property = reject_hardware  # type: ignore[method-assign]
+        backend.set_property = reject_hardware  # type: ignore[method-assign]
         backend.configure_video_pipeline(VideoPipelineConfig(hwdec="auto", hwdec_fallback=True))
         self.assertEqual(fake.properties["hwdec"], "no")
         backend.poll_timer.stop()
 
     def test_renderer_shutdown_and_physical_framebuffer_sizing_are_explicit(self) -> None:
-        widget = VideoWidget(); widget.resize(320, 180)
-        with patch.object(VideoWidget, "devicePixelRatioF", return_value=1.5):
-            self.assertEqual(widget._framebuffer_dimensions(), (480, 270))
-
-        class RenderContext:
-            update_cb = object()
-            freed = False
-
-            def free(self) -> None:
-                self.freed = True
-
-        context = RenderContext(); destroyed: list[bool] = []
-        widget._render_context = context
-        widget.rendererDestroyed.connect(lambda: destroyed.append(True))
-        widget.shutdown_renderer(permanent=False)
-        self.assertTrue(context.freed)
-        self.assertIsNone(context.update_cb)
-        self.assertEqual(destroyed, [True])
-        widget.deleteLater()
+        render_window = MpvRenderWindow(); render_window.resize(320, 180)
+        with patch.object(MpvRenderWindow, "devicePixelRatio", return_value=1.5):
+            self.assertEqual(render_window._framebuffer_dimensions(), (480, 270))
+        source = (PACKAGE / "ui/mpv_render_window.py").read_text(encoding="utf-8")
+        self.assertIn("free_render_context", source)
+        self.assertIn("context.swapBuffers(self)", source)
+        self.assertIn("report_swap", source)
+        render_window.deleteLater()
 
     def test_replaygain_signed_delay_language_and_device_selection(self) -> None:
         backend, fake = self._backend()

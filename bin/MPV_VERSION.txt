@@ -1,0 +1,8 @@
+mpv v0.41.0-60-g85bf9f4ff
+Architecture: x86_64
+Source: shinchiro/mpv-winbuild-cmake libmpv release
+Vendored filename: mpv-2.dll
+
+Upgrades are deliberate compatibility changes. Before replacing this DLL, run
+the Section 1 playback, render, property, locale, hardware-decoding, and clean
+Windows 11 packaging acceptance checks.

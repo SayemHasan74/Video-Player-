@@ -4,3 +4,4 @@ yt-dlp
 requests
 mutagen
 winsdk; platform_system == "Windows"
+pefile

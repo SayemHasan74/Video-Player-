@@ -15,7 +15,7 @@ Download `CometPlayer-v1.0.0-portable.zip`, extract it, and run `CometPlayer.exe
 ## Requirements
 
 - Python 3.11+
-- `mpv-2.dll` on Windows
+- The vendored x64 `bin/mpv-2.dll` included with this repository/build
 - Dependencies from `requirements.txt`
 
 ## Installation
@@ -26,10 +26,17 @@ pip install -r requirements.txt
 
 ## mpv-2.dll Setup
 
-1. Open https://sourceforge.net/projects/mpv-player-windows/files/libmpv/
-2. Download the latest `mpv-dev-x86_64` zip.
-3. Extract it and find `mpv-2.dll`. If it is named `libmpv-2.dll`, rename it to `mpv-2.dll`.
-4. Place it beside `main.py` inside the `prism_player` folder, beside the workspace-root `main.py`, or put it somewhere on `PATH`.
+Comet uses only the deliberately vendored `bin/mpv-2.dll`; it does not search
+or modify `PATH`. The current x86-64 build and upgrade policy are recorded in
+`bin/MPV_VERSION.txt`. DLL upgrades must come from an x86-64
+`shinchiro/mpv-winbuild-cmake` libmpv build and must pass the Section 1
+rendering, property, locale, hardware-decoding, and clean-machine tests.
+
+Before testing Qt integration against a replacement DLL, verify real playback:
+
+```powershell
+python tools/mpv_sanity_check.py "C:\Media\test-video.mkv"
+```
 
 ## Run
 
@@ -106,15 +113,35 @@ File opening uses the separate single-file and multiple-file actions selected in
 
 ## Window and rendering architecture
 
-- libmpv renders through `MpvRenderContext` into one Qt-owned `QOpenGLWidget`.
-- DLL discovery is bootstrapped before Qt or any application module can import `python-mpv`.
-- Render updates cross into Qt through a queued signal; framebuffer dimensions use physical device pixels, and GL destruction/recovery is explicit across fullscreen, Music Mode, and PiP.
+- libmpv renders through `MpvRenderContext` into a native `QWindow` with its own `QOpenGLContext`.
+- `QWidget.createWindowContainer()` embeds that internal render window in the ordinary Qt video host. OSC, OSD, thumbnails, and other UI remain QWidget siblings and are never parented onto the render window.
+- `core/dll_bootstrap.py` loads the absolute vendored DLL before Qt; after `QApplication` is created, `LC_NUMERIC` is reset to `C`, and only then is `python-mpv` imported.
+- Every mpv callback emits through `core/mpv_signals.py`. Explicit queued connections update the main-thread-only `PlayerState` cache; UI code never reads the live mpv object.
+- Render updates cross into Qt through the queued bridge and call `QWindow.requestUpdate()`; no render polling timer is used. Framebuffer dimensions use physical device pixels.
 - The default color path safely converts into the configured sRGB or Display-P3 Qt surface. HDR passthrough is opt-in because Windows, the compositor, display, and GPU must all support it.
 - Title, menu, controls, OSD, and playlist are ordinary child overlays in the same Qt tree.
 - `WindowModeController` owns normal, maximized, fullscreen, compact, and PiP transitions.
 - `OverlayController` owns chrome animation and overlay geometry.
 - `PlayerInputController` owns application shortcuts, middle-click compact mode, and playlist outside-click behavior.
 - No native mpv child window, global native mouse hook, or delayed geometry correction is used.
+
+### Windows 11 DPI and GPU selection
+
+The executable manifest declares Per-Monitor-V2 DPI awareness, and the app uses
+Qt's pass-through scale-factor policy. The packaging step also exports
+`NvOptimusEnablement=1` and `AmdPowerXpressRequestHighPerformance=1` from the
+final executable. If Windows still selects the wrong adapter, open
+**Settings → System → Display → Graphics**, add `CometV2.exe`, choose
+**Options**, and select **High performance**.
+
+An unsigned personal build can trigger Windows 11 SmartScreen on first launch.
+That is expected reputation behavior, not an mpv or rendering failure. Code
+signing is required to remove that distribution warning reliably.
+
+Before release, test the frozen onedir build on a clean Windows 11 machine with
+no system mpv installation and no PATH edits. Confirm local playback, 4K HEVC
+with `d3d11va`, live fallback to `hwdec=no`, continuous resizing, mixed-DPI
+monitor movement, and rapid seek dragging.
 
 ## Audio and Windows integration
 
