@@ -47,6 +47,11 @@ SWP_NOZORDER = 0x0004
 SWP_NOACTIVATE = 0x0010
 SWP_FRAMECHANGED = 0x0020
 
+SM_CXBORDER = 5
+SM_CXFRAME = 32
+SM_CYFRAME = 33
+SM_CXPADDEDBORDER = 92
+
 
 class POINT(ctypes.Structure):
     _fields_ = (("x", wintypes.LONG), ("y", wintypes.LONG))
@@ -86,6 +91,90 @@ def signed_word(value: int) -> int:
 
 def point_from_lparam(lparam: int) -> tuple[int, int]:
     return signed_word(lparam), signed_word(lparam >> 16)
+
+
+def classify_resize_border(
+    x: int,
+    y: int,
+    width: int,
+    height: int,
+    frame_x: int,
+    frame_y: int,
+    diagonal: int,
+) -> int | None:
+    """Classify one physical-pixel point into a native resize region."""
+    left = x < frame_x
+    right = x >= width - frame_x
+    top = y < frame_y
+    bottom = y >= height - frame_y
+    diagonal_left = x < diagonal
+    diagonal_right = x >= width - diagonal
+    diagonal_top = y < diagonal
+    diagonal_bottom = y >= height - diagonal
+
+    # Corners deliberately extend farther along either adjoining edge than a
+    # plain edge. At least one axis must still be inside the real frame.
+    if (top and diagonal_left) or (left and diagonal_top):
+        return HTTOPLEFT
+    if (top and diagonal_right) or (right and diagonal_top):
+        return HTTOPRIGHT
+    if (bottom and diagonal_left) or (left and diagonal_bottom):
+        return HTBOTTOMLEFT
+    if (bottom and diagonal_right) or (right and diagonal_bottom):
+        return HTBOTTOMRIGHT
+    if top:
+        return HTTOP
+    if bottom:
+        return HTBOTTOM
+    if left:
+        return HTLEFT
+    if right:
+        return HTRIGHT
+    return None
+
+
+def dpi_aware_resize_hit_test(hwnd: int, screen_x: int, screen_y: int) -> int | None:
+    """Return a DPI-correct Win32 resize hit code, or None for client content."""
+    if os.name != "nt":
+        return None
+    user32 = ctypes.windll.user32
+    handle = wintypes.HWND(hwnd)
+    is_zoomed = user32.IsZoomed
+    is_zoomed.argtypes = (wintypes.HWND,)
+    is_zoomed.restype = wintypes.BOOL
+    if is_zoomed(handle):
+        return HTCLIENT
+
+    get_dpi = user32.GetDpiForWindow
+    get_dpi.argtypes = (wintypes.HWND,)
+    get_dpi.restype = wintypes.UINT
+    get_metric = user32.GetSystemMetricsForDpi
+    get_metric.argtypes = (ctypes.c_int, wintypes.UINT)
+    get_metric.restype = ctypes.c_int
+    get_window_rect = user32.GetWindowRect
+    get_window_rect.argtypes = (wintypes.HWND, ctypes.POINTER(RECT))
+    get_window_rect.restype = wintypes.BOOL
+
+    dpi = int(get_dpi(handle))
+    rect = RECT()
+    if dpi <= 0 or not get_window_rect(handle, ctypes.byref(rect)):
+        return None
+    frame_x = int(get_metric(SM_CXFRAME, dpi)) + int(
+        get_metric(SM_CXPADDEDBORDER, dpi)
+    )
+    frame_y = int(get_metric(SM_CYFRAME, dpi)) + int(
+        get_metric(SM_CXPADDEDBORDER, dpi)
+    )
+    diagonal = frame_x * 2 + int(get_metric(SM_CXBORDER, dpi))
+    return classify_resize_border(
+        int(screen_x - rect.left),
+        int(screen_y - rect.top),
+        int(rect.right - rect.left),
+        int(rect.bottom - rect.top),
+        max(1, frame_x),
+        max(1, frame_y),
+        max(1, diagonal),
+    )
 
 
 def enable_dwm_custom_frame(hwnd: int) -> bool:

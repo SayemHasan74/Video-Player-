@@ -25,7 +25,21 @@ from core.preferences import (
     ENABLE_TITLE_BAR_AND_OSC,
     HIDE_OSC_WHEN_CURSOR_OUTSIDE,
 )
-from ui.geometry import RECT, WMSZ_RIGHT, correct_sizing_rect, point_from_lparam
+from ui.geometry import (
+    HTBOTTOM,
+    HTBOTTOMLEFT,
+    HTBOTTOMRIGHT,
+    HTLEFT,
+    HTRIGHT,
+    HTTOP,
+    HTTOPLEFT,
+    HTTOPRIGHT,
+    RECT,
+    WMSZ_RIGHT,
+    classify_resize_border,
+    correct_sizing_rect,
+    point_from_lparam,
+)
 from ui.osc_layout_constants import (
     FULLSCREEN_TOP_OSC_HEIGHT,
     MIN_WINDOW_SIZE,
@@ -110,6 +124,19 @@ class Section2WindowOscTests(unittest.TestCase):
         packed = ((-20 & 0xFFFF) << 16) | (-120 & 0xFFFF)
         self.assertEqual(point_from_lparam(packed), (-120, -20))
 
+    def test_dpi_border_classifier_covers_edges_and_widened_corners(self) -> None:
+        args = (1000, 600, 10, 10, 21)
+        self.assertEqual(classify_resize_border(0, 0, *args), HTTOPLEFT)
+        self.assertEqual(classify_resize_border(999, 0, *args), HTTOPRIGHT)
+        self.assertEqual(classify_resize_border(0, 599, *args), HTBOTTOMLEFT)
+        self.assertEqual(classify_resize_border(999, 599, *args), HTBOTTOMRIGHT)
+        self.assertEqual(classify_resize_border(500, 0, *args), HTTOP)
+        self.assertEqual(classify_resize_border(500, 599, *args), HTBOTTOM)
+        self.assertEqual(classify_resize_border(0, 300, *args), HTLEFT)
+        self.assertEqual(classify_resize_border(999, 300, *args), HTRIGHT)
+        self.assertEqual(classify_resize_border(15, 5, *args), HTTOPLEFT)
+        self.assertIsNone(classify_resize_border(500, 300, *args))
+
     def test_fullscreen_state_machine_rejects_racing_toggle_and_esc_queues_exit(self) -> None:
         window = _FullscreenWindow()
         window.show()
@@ -191,6 +218,11 @@ class Section2WindowOscTests(unittest.TestCase):
         self.assertIn("WM_NCCALCSIZE", main)
         self.assertIn("WM_NCHITTEST", main)
         self.assertIn("HTMAXBUTTON", main)
+        self.assertIn("dpi_aware_resize_hit_test", main)
+        geometry = (PACKAGE / "ui/geometry.py").read_text(encoding="utf-8")
+        self.assertIn("GetDpiForWindow", geometry)
+        self.assertIn("GetSystemMetricsForDpi", geometry)
+        self.assertIn("IsZoomed", geometry)
         self.assertIn("WM_SIZING", main)
         self.assertIn("startSystemMove", main)
         self.assertNotIn("AltModifier", main[main.index("def _perform_resize"):])
@@ -198,6 +230,11 @@ class Section2WindowOscTests(unittest.TestCase):
         self.assertIn('keepaspect_window="no"', engine)
         self.assertIn("rendererReady.connect", manager)
         self.assertLess(manager.index("_show_startup_window()"), manager.index("renderer_active"))
+        locked = "# LOCKED BEHAVIOR — see Section 2.5. Do not move rendering back onto the GUI thread, and do not simplify the WM_NCHITTEST border logic, without flagging it first."
+        render_thread = (PACKAGE / "ui/mpv_render_thread.py").read_text(encoding="utf-8")
+        self.assertIn(locked, main)
+        self.assertIn(locked, render_thread)
+        self.assertIn("_reveal_fullscreen_cursor", main)
 
 
 if __name__ == "__main__":

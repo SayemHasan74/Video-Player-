@@ -20,6 +20,7 @@ class Section1FoundationTests(unittest.TestCase):
         for relative in (
             "core/dll_bootstrap.py", "core/mpv_signals.py", "core/mpv_engine.py",
             "core/mpv_properties.py", "core/player_state.py", "ui/mpv_render_window.py",
+            "ui/mpv_render_thread.py",
         ):
             self.assertTrue((PACKAGE / relative).is_file(), relative)
         dll = ROOT / "bin/mpv-2.dll"

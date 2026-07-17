@@ -114,10 +114,13 @@ class RendererAudioWindowsTests(unittest.TestCase):
         render_window = MpvRenderWindow(); render_window.resize(320, 180)
         with patch.object(MpvRenderWindow, "devicePixelRatio", return_value=1.5):
             self.assertEqual(render_window._framebuffer_dimensions(), (480, 270))
-        source = (PACKAGE / "ui/mpv_render_window.py").read_text(encoding="utf-8")
-        self.assertIn("free_render_context", source)
-        self.assertIn("context.swapBuffers(self)", source)
-        self.assertIn("report_swap", source)
+        window_source = (PACKAGE / "ui/mpv_render_window.py").read_text(encoding="utf-8")
+        thread_source = (PACKAGE / "ui/mpv_render_thread.py").read_text(encoding="utf-8")
+        self.assertIn("free_render_context", thread_source)
+        self.assertIn("context.swapBuffers(self._window)", thread_source)
+        self.assertIn("report_swap", thread_source)
+        self.assertNotIn("makeCurrent", window_source)
+        self.assertNotIn("swapBuffers", window_source)
         render_window.deleteLater()
 
     def test_replaygain_signed_delay_language_and_device_selection(self) -> None:

@@ -1,3 +1,4 @@
+# LOCKED BEHAVIOR — see Section 2.5. Do not move rendering back onto the GUI thread, and do not simplify the WM_NCHITTEST border logic, without flagging it first.
 """Root application window and component controller."""
 
 from __future__ import annotations
@@ -73,6 +74,7 @@ from ui.geometry import (
     WM_NCHITTEST,
     WM_SIZING,
     correct_sizing_rect,
+    dpi_aware_resize_hit_test,
     enable_dwm_custom_frame,
     native_message,
     point_from_lparam,
@@ -155,6 +157,10 @@ class MainWindow(QMainWindow):
         self._auto_resized_source = ""
         self._chrome_visible = True
         self._is_playing = False
+        self._fullscreen_cursor_active = False
+        self._fullscreen_cursor_timer = QTimer(self)
+        self._fullscreen_cursor_timer.setSingleShot(True)
+        self._fullscreen_cursor_timer.timeout.connect(self._hide_fullscreen_cursor)
         self.overlays = OscController(self)
         self.window_modes = WindowModeController(self)
         self.inputs = PlayerInputController(self)
@@ -318,31 +324,14 @@ class MainWindow(QMainWindow):
             return False, 0
         if msg.message == WM_NCCALCSIZE:
             return True, 0
-        if msg.message == WM_NCHITTEST and not (self.isMaximized() or self.isFullScreen()):
+        if msg.message == WM_NCHITTEST:
             screen_x, screen_y = point_from_lparam(int(msg.lParam))
+            if self.isFullScreen():
+                return True, HTCLIENT
+            border_hit = dpi_aware_resize_hit_test(int(self.winId()), screen_x, screen_y)
+            if border_hit is not None:
+                return True, border_hit
             global_point = QPoint(screen_x, screen_y)
-            local = self.mapFromGlobal(global_point)
-            border = 8
-            left = local.x() < border
-            right = local.x() >= self.width() - border
-            top = local.y() < border
-            bottom = local.y() >= self.height() - border
-            if top and left:
-                return True, HTTOPLEFT
-            if top and right:
-                return True, HTTOPRIGHT
-            if bottom and left:
-                return True, HTBOTTOMLEFT
-            if bottom and right:
-                return True, HTBOTTOMRIGHT
-            if left:
-                return True, HTLEFT
-            if right:
-                return True, HTRIGHT
-            if top:
-                return True, HTTOP
-            if bottom:
-                return True, HTBOTTOM
             title_point = self.title_bar.mapFromGlobal(global_point)
             if self.title_bar.rect().contains(title_point):
                 if self.title_bar.max_button.geometry().contains(title_point):
@@ -1405,7 +1394,10 @@ class MainWindow(QMainWindow):
 
     def _window_mode_changed(self, mode: WindowMode) -> None:
         self.plugins.events.emit("window.mode", mode.name.lower())
-        self._update_cursor_visibility()
+        if mode is WindowMode.FULLSCREEN:
+            self._reveal_fullscreen_cursor()
+        else:
+            self._update_cursor_visibility()
 
     def _video_clicked(self) -> None:
         if not self._pip_mode:
@@ -1455,6 +1447,7 @@ class MainWindow(QMainWindow):
         self._show_player_chrome()
         if self._is_playing and not self._mini_mode:
             self._schedule_hide_player_chrome(3000)
+        self._reveal_fullscreen_cursor()
         self._update_cursor_visibility()
 
     def _show_osc_momentarily(self) -> None:
@@ -1462,15 +1455,55 @@ class MainWindow(QMainWindow):
 
     def _update_cursor_visibility(self) -> None:
         if not self.isFullScreen():
-            self.unsetCursor()
+            self._fullscreen_cursor_timer.stop()
+            self._fullscreen_cursor_active = False
+            self._unset_player_cursor()
             return
         keep_visible = bool(
-            self.settings.get(DONT_HIDE_CURSOR_FULLSCREEN_WHILE_OSC_VISIBLE, False)
-            and self._chrome_visible
+            self._chrome_visible
+            and (
+                self._fullscreen_cursor_active
+                or self.settings.get(
+                    DONT_HIDE_CURSOR_FULLSCREEN_WHILE_OSC_VISIBLE,
+                    False,
+                )
+            )
         )
-        self.setCursor(
-            QCursor(Qt.CursorShape.ArrowCursor if keep_visible else Qt.CursorShape.BlankCursor)
+        self._set_player_cursor(
+            Qt.CursorShape.ArrowCursor if keep_visible else Qt.CursorShape.BlankCursor
         )
+
+
+    def _reveal_fullscreen_cursor(self) -> None:
+        """Show the cursor on activity, then let the shared OSC timeout hide it."""
+        if not self.isFullScreen():
+            return
+        self._fullscreen_cursor_active = True
+        delay = max(100, int(self.settings.get(OSC_HIDE_DELAY_MS, 3000)))
+        self._fullscreen_cursor_timer.start(delay)
+        self._set_player_cursor(Qt.CursorShape.ArrowCursor)
+
+    def _hide_fullscreen_cursor(self) -> None:
+        self._fullscreen_cursor_active = False
+        self._update_cursor_visibility()
+
+    def _set_player_cursor(self, shape: Qt.CursorShape) -> None:
+        """Apply cursor state to Qt widgets and the embedded native QWindow."""
+        cursor = QCursor(shape)
+        self.setCursor(cursor)
+        self.video.setCursor(cursor)
+        self.video.container.setCursor(cursor)
+        render_window = self.video.render_window
+        if hasattr(render_window, "setCursor"):
+            render_window.setCursor(cursor)
+
+    def _unset_player_cursor(self) -> None:
+        self.unsetCursor()
+        self.video.unsetCursor()
+        self.video.container.unsetCursor()
+        render_window = self.video.render_window
+        if hasattr(render_window, "unsetCursor"):
+            render_window.unsetCursor()
 
     def _note_user_activity(self) -> None:
         """Keep chrome predictable: every player input restarts one hide timer."""

@@ -1,11 +1,11 @@
-"""Native QWindow OpenGL surface for libmpv's render API."""
+"""Native QWindow surface with rendering owned by a dedicated thread."""
 
 from __future__ import annotations
 
 import logging
 from typing import Any
 
-from PyQt6.QtCore import QEvent, QPoint, Qt, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import QPoint, Qt, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import (
     QExposeEvent,
     QKeyEvent,
@@ -19,11 +19,12 @@ from PyQt6.QtGui import (
 )
 
 from core.mpv_engine import MpvEngine
+from ui.mpv_render_thread import MpvRenderThread
 from ui.video_area_input import drag_threshold_reached
 
 
 class MpvRenderWindow(QWindow):
-    """Own the native GL context and present mpv frames on Qt update requests."""
+    """Own the native surface and hand all GL presentation to its worker."""
 
     doubleClicked = pyqtSignal()
     clicked = pyqtSignal()
@@ -45,7 +46,8 @@ class MpvRenderWindow(QWindow):
         self.logger = logging.getLogger(__name__)
         self.setSurfaceType(QSurface.SurfaceType.OpenGLSurface)
         self.setFormat(QSurfaceFormat.defaultFormat())
-        self._gl_context: QOpenGLContext | None = None
+        self._share_context: QOpenGLContext | None = None
+        self._render_thread: MpvRenderThread | None = None
         self._engine: MpvEngine | None = None
         self._renderer_active = False
         self._renderer_generation = 0
@@ -70,16 +72,8 @@ class MpvRenderWindow(QWindow):
         if self._engine is engine:
             return
         if self._engine is not None:
-            try:
-                self._engine.signals.render_update.disconnect(self._request_render)
-            except (TypeError, RuntimeError):
-                pass
+            self.shutdown_renderer(permanent=False)
         self._engine = engine
-        if engine is not None:
-            engine.signals.render_update.connect(
-                self._request_render,
-                Qt.ConnectionType.QueuedConnection,
-            )
         if self.isExposed():
             self.ensure_renderer()
 
@@ -94,30 +88,28 @@ class MpvRenderWindow(QWindow):
         super().exposeEvent(event)
         if self.isExposed() and not self._shutting_down:
             self.ensure_renderer()
-            self.requestUpdate()
+        if self._render_thread is not None:
+            self._render_thread.set_exposed(self.isExposed())
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
         self._last_framebuffer_size = self._framebuffer_dimensions()
-        if self.isExposed():
-            self.requestUpdate()
-
-    def event(self, event: QEvent) -> bool:
-        if event.type() == QEvent.Type.UpdateRequest:
-            self._render_now()
-            return True
-        return super().event(event)
+        if self._render_thread is not None:
+            self._render_thread.set_framebuffer_size(*self._last_framebuffer_size)
 
     @pyqtSlot()
     def _request_render(self) -> None:
-        if not self._shutting_down:
-            self.requestUpdate()
+        thread = self._render_thread
+        if not self._shutting_down and thread is not None:
+            thread.request_frame()
 
     def ensure_renderer(self) -> bool:
         if self._shutting_down or self._engine is None:
             return False
+        if self._render_thread is not None and self._render_thread.isRunning():
+            return True
         self.create()
-        if self._gl_context is None:
+        if self._share_context is None:
             context = QOpenGLContext(self)
             context.setFormat(self.requestedFormat())
             if not context.create():
@@ -127,70 +119,91 @@ class MpvRenderWindow(QWindow):
                 self._context_about_to_be_destroyed,
                 Qt.ConnectionType.DirectConnection,
             )
-            self._gl_context = context
-        if not self._gl_context.makeCurrent(self):
-            self.rendererError.emit("OpenGL context could not be made current")
-            return False
-        try:
-            if not self._renderer_active:
-                self._engine.create_render_context(self._get_proc_address)
-                self._renderer_active = True
-                self._renderer_generation += 1
-                self.rendererReady.emit()
-        except Exception as exc:
-            self.logger.exception("Could not initialize mpv OpenGL renderer")
-            self.rendererError.emit(f"OpenGL renderer could not start: {exc}")
-            self._renderer_active = False
-        finally:
-            self._gl_context.doneCurrent()
-        return self._renderer_active
+            self._share_context = context
+        self._last_framebuffer_size = self._framebuffer_dimensions()
+        thread = MpvRenderThread(
+            self,
+            self._engine,
+            self._share_context,
+            self.requestedFormat(),
+        )
+        self._render_thread = thread
+        thread.set_framebuffer_size(*self._last_framebuffer_size)
+        thread.set_exposed(self.isExposed())
+        thread.rendererReady.connect(self._thread_renderer_ready, Qt.ConnectionType.QueuedConnection)
+        thread.rendererError.connect(self._thread_renderer_error, Qt.ConnectionType.QueuedConnection)
+        thread.rendererStopped.connect(
+            self._thread_renderer_stopped,
+            Qt.ConnectionType.QueuedConnection,
+        )
+        self._engine.signals.render_update.connect(
+            thread.request_frame,
+            Qt.ConnectionType.DirectConnection,
+        )
+        thread.start()
+        return True
 
-    def _render_now(self) -> None:
-        if not self.isExposed() or self._shutting_down or self._engine is None:
+    @pyqtSlot()
+    def _thread_renderer_ready(self) -> None:
+        thread = self.sender()
+        if thread is not self._render_thread or self._shutting_down:
             return
-        if not self._renderer_active and not self.ensure_renderer():
-            return
-        context = self._gl_context
-        if context is None or not context.makeCurrent(self):
-            return
-        width, height = self._framebuffer_dimensions()
-        self._last_framebuffer_size = (width, height)
-        try:
-            self._engine.render_frame(width, height)
-            context.swapBuffers(self)
-            self._engine.report_swap()
-        except Exception as exc:
-            self.logger.warning("mpv frame render failed: %s", exc)
-        finally:
-            context.doneCurrent()
+        self._renderer_active = True
+        self._renderer_generation += 1
+        self.rendererReady.emit()
 
-    def _get_proc_address(self, _context: object, name: bytes) -> int:
-        context = QOpenGLContext.currentContext()
-        if context is None:
-            return 0
-        address = context.getProcAddress(name)
-        return int(address) if address else 0
+    @pyqtSlot(str)
+    def _thread_renderer_error(self, message: str) -> None:
+        if self.sender() is self._render_thread:
+            self.rendererError.emit(f"OpenGL renderer could not start: {message}")
+
+    @pyqtSlot()
+    def _thread_renderer_stopped(self) -> None:
+        thread = self.sender()
+        if thread is not self._render_thread:
+            return
+        if self._engine is not None:
+            try:
+                self._engine.signals.render_update.disconnect(thread.request_frame)
+            except (TypeError, RuntimeError):
+                pass
+        was_active = self._renderer_active
+        self._render_thread = None
+        self._renderer_active = False
+        if was_active:
+            self.rendererDestroyed.emit()
 
     def shutdown_renderer(self, permanent: bool = True) -> None:
         if permanent:
             self._shutting_down = True
-        context = self._gl_context
-        if self._renderer_active and self._engine is not None:
-            made_current = bool(context and context.makeCurrent(self))
-            try:
-                self._engine.free_render_context()
-            finally:
-                if made_current and context is not None:
-                    context.doneCurrent()
+        thread = self._render_thread
+        was_running = bool(thread and thread.isRunning())
+        if thread is not None:
+            if self._engine is not None:
+                try:
+                    self._engine.signals.render_update.disconnect(thread.request_frame)
+                except (TypeError, RuntimeError):
+                    pass
+            thread.shutdown()
+            if not thread.wait(5000):
+                self.logger.error("Timed out waiting for the mpv render thread to stop")
+            self._render_thread = None
+        if self._renderer_active or was_running:
             self._renderer_active = False
             self.rendererDestroyed.emit()
         if permanent:
-            self._gl_context = None
+            context = self._share_context
+            self._share_context = None
+            if context is not None:
+                context.deleteLater()
 
     @pyqtSlot()
     def _context_about_to_be_destroyed(self) -> None:
-        self.shutdown_renderer(permanent=False)
-        self._gl_context = None
+        if self._share_context is not None:
+            try:
+                self.shutdown_renderer(permanent=False)
+            finally:
+                self._share_context = None
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         self.requestActivate()

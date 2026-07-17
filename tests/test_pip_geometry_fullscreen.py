@@ -127,6 +127,27 @@ class PipGeometryFullscreenTests(unittest.TestCase):
             window._toggle_fullscreen(); APP.processEvents()
             self._dispose(window)
 
+    def test_fullscreen_cursor_reappears_on_activity_then_obeys_timeout(self) -> None:
+        with TemporaryDirectory() as directory:
+            window = self._window(
+                Path(directory),
+                {
+                    "ui.animations": False,
+                    "ui.dontHideCursorInFullscreenWhileOSCIsVisible": False,
+                },
+            )
+            window._toggle_fullscreen(); APP.processEvents()
+            window._chrome_visible = True
+            window._reveal_fullscreen_cursor()
+            self.assertEqual(window.cursor().shape(), Qt.CursorShape.ArrowCursor)
+            window._hide_fullscreen_cursor()
+            self.assertEqual(window.cursor().shape(), Qt.CursorShape.BlankCursor)
+            window.settings.set("ui.dontHideCursorInFullscreenWhileOSCIsVisible", True)
+            window._update_cursor_visibility()
+            self.assertEqual(window.cursor().shape(), Qt.CursorShape.ArrowCursor)
+            window._toggle_fullscreen(); APP.processEvents()
+            self._dispose(window)
+
     def test_optional_video_drag_moves_window_and_video_scroll_setting_is_independent(self) -> None:
         with TemporaryDirectory() as directory:
             window = self._window(Path(directory), {"window.drag_from_video": True, "ui.video_scroll_enabled": False, "ui.osc_scroll_enabled": True})
