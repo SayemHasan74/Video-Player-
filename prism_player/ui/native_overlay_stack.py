@@ -29,7 +29,10 @@ class NativeOverlayStack(QObject):
 
     def __init__(self, owner: QWidget) -> None:
         super().__init__(owner)
+        self._owner = owner
         self._widgets: list[QWidget] = []
+        self._surface: QObject | None = None
+        self._raise_queued = False
         self.enabled = sys.platform == "win32" and QGuiApplication.platformName() != "offscreen"
         self._set_window_pos = None
         if self.enabled:
@@ -45,6 +48,17 @@ class NativeOverlayStack(QObject):
             )
             function.restype = wintypes.BOOL
             self._set_window_pos = function
+        owner.installEventFilter(self)
+
+    def watch_surface(self, surface: QObject | None) -> None:
+        """Reassert overlays when the embedded render surface is exposed."""
+        if self._surface is surface:
+            return
+        if self._surface is not None:
+            self._surface.removeEventFilter(self)
+        self._surface = surface
+        if surface is not None:
+            surface.installEventFilter(self)
 
     def register(self, widget: QWidget | None) -> None:
         if widget is None or widget in self._widgets:
@@ -98,7 +112,30 @@ class NativeOverlayStack(QObject):
             if widget.isVisible():
                 self.raise_widget(widget)
 
+    def raise_all_deferred(self) -> None:
+        if self._raise_queued:
+            return
+        self._raise_queued = True
+
+        def promote() -> None:
+            self._raise_queued = False
+            self.raise_all()
+
+        QTimer.singleShot(0, promote)
+
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if watched is self._owner and event.type() in {
+            QEvent.Type.Show,
+            QEvent.Type.WindowActivate,
+            QEvent.Type.WindowStateChange,
+        }:
+            self.raise_all_deferred()
+        elif watched is self._surface and event.type() in {
+            QEvent.Type.Expose,
+            QEvent.Type.Show,
+            QEvent.Type.PlatformSurface,
+        }:
+            self.raise_all_deferred()
         if (
             self.enabled
             and isinstance(watched, QWidget)

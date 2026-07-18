@@ -148,6 +148,11 @@ class OverlayController(QObject):
             window._update_cursor_visibility()
             return
         if window._chrome_visible == show and self.animation is None:
+            if show:
+                # A native QWindow can reclaim Z-order during activation or a
+                # fullscreen expose even though Qt still reports the widgets
+                # as visible. Mouse activity must promote them again.
+                self._raise_chrome()
             return
         if self.animation is not None:
             self.animation.stop()
@@ -230,12 +235,6 @@ class OverlayController(QObject):
             if hasattr(window, "sidebars"):
                 window.sidebars.suspend()
             window.music_mode.position(shell_rect)
-        elif osc_position == "bottom":
-            # Reserve one stable dock strip even while the OSC is hidden. This
-            # prevents the libmpv render surface from resizing on every reveal.
-            base_video_rect.setHeight(
-                max(0, base_video_rect.height() - window.control_bar.height())
-            )
         # In the normal window modes SidebarController is the sole owner of
         # video geometry.  Setting the full-width rectangle here and the
         # sidebar-adjusted rectangle a few lines later caused a visible
@@ -289,7 +288,13 @@ class OverlayController(QObject):
             window.app_menu_bar.raise_()
         window.control_bar.raise_()
         if hasattr(window, "native_overlays"):
+            window.native_overlays.raise_widget(window.title_bar)
+            window.native_overlays.raise_widget(window.app_menu_bar)
             window.native_overlays.raise_widget(window.control_bar)
+
+    def raise_chrome(self) -> None:
+        """Public mode-transition hook for native chrome promotion."""
+        self._raise_chrome()
 
     def _control_geometry(self, visible: bool) -> QRect:
         window = self.window

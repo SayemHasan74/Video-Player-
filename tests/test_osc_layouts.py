@@ -121,7 +121,7 @@ class OscLayoutTests(unittest.TestCase):
         self.assertEqual(bar.seekbar._chapter_times, [10.0, 60.0])
         self._dispose(bar)
 
-    def test_layout_geometry_is_distinct_and_bottom_dock_never_wobbles_video(self) -> None:
+    def test_layout_geometry_is_distinct_and_every_osc_overlays_video(self) -> None:
         with TemporaryDirectory() as directory:
             window = self._window(Path(directory))
             shell = window.central_shell.rect()
@@ -148,10 +148,8 @@ class OscLayoutTests(unittest.TestCase):
             window._chrome_visible = True
             window._apply_ui_preferences()
             visible_video = window.video.geometry()
-            self.assertEqual(
-                visible_video.height(),
-                shell.height() - window.control_bar.height(),
-            )
+            self.assertEqual(visible_video, shell)
+            self.assertEqual(window.contentsMargins().top(), 0)
             window._chrome_visible = False
             window.overlays.position()
             self.assertEqual(window.video.geometry(), visible_video)

@@ -15,14 +15,13 @@ PACKAGE = ROOT / "prism_player"
 if str(PACKAGE) not in sys.path:
     sys.path.insert(0, str(PACKAGE))
 
-from PyQt6.QtCore import QEventLoop, QPoint, QTimer, Qt
+from PyQt6.QtCore import QEvent, QEventLoop, QPoint, QTimer, Qt
 from PyQt6.QtWidgets import QApplication
 
 from config.settings import SettingsStore
 from core.history_manager import HistoryManager
 from core.player_backend import PlayerBackend
 from ui.main_window import MainWindow
-from ui.osc_layout_constants import APP_MENU_HEIGHT, TITLE_BAR_HEIGHT
 from ui.window_mode import WindowMode
 
 
@@ -72,9 +71,8 @@ class PipGeometryFullscreenTests(unittest.TestCase):
             window = self._window(Path(directory), {"playback.auto_resize": True})
             info = {"source": "movie.mkv", "has_video": True, "video_width": 1920, "video_height": 1080, "video_aspect": 16 / 9}
             window._media_info_changed(info); APP.processEvents()
-            chrome_height = TITLE_BAR_HEIGHT + APP_MENU_HEIGHT
             self.assertAlmostEqual(
-                window.width() / (window.height() - chrome_height),
+                window.width() / window.height(),
                 16 / 9,
                 delta=0.03,
             )
@@ -85,7 +83,7 @@ class PipGeometryFullscreenTests(unittest.TestCase):
             with patch.object(QApplication, "keyboardModifiers", return_value=Qt.KeyboardModifier.NoModifier):
                 window._perform_resize(QPoint(1160, 350)); window._apply_pending_resize()
             self.assertAlmostEqual(
-                window.width() / (window.height() - chrome_height),
+                window.width() / window.height(),
                 16 / 9,
                 delta=0.03,
             )
@@ -93,7 +91,7 @@ class PipGeometryFullscreenTests(unittest.TestCase):
             with patch.object(QApplication, "keyboardModifiers", return_value=Qt.KeyboardModifier.AltModifier):
                 window._perform_resize(QPoint(1260, 350)); window._apply_pending_resize()
             self.assertAlmostEqual(
-                window.width() / (window.height() - chrome_height),
+                window.width() / window.height(),
                 16 / 9,
                 delta=0.03,
             )
@@ -109,8 +107,37 @@ class PipGeometryFullscreenTests(unittest.TestCase):
             self.assertTrue(window.isFullScreen())
             self.assertTrue(window.title_bar.isVisible())
             self.assertTrue(window.control_bar.isVisible())
+            self.assertEqual(window.contentsMargins().top(), 0)
+            self.assertEqual(window.video.geometry(), window.central_shell.rect())
+            self.assertTrue(window.native_overlays.is_registered(window.title_bar))
+            self.assertTrue(window.native_overlays.is_registered(window.app_menu_bar))
+            self.assertTrue(window.native_overlays.is_registered(window.control_bar))
             window._toggle_fullscreen(); APP.processEvents()
             self.assertFalse(window.isFullScreen())
+            self._dispose(window)
+
+    def test_fullscreen_mouse_activity_reveals_and_promotes_native_chrome(self) -> None:
+        with TemporaryDirectory() as directory:
+            window = self._window(Path(directory), {"ui.animations": False})
+            window._toggle_fullscreen(); APP.processEvents()
+            window._is_playing = True
+            window.overlays.animate(False); APP.processEvents()
+            self.assertFalse(window._chrome_visible)
+
+            with patch.object(window.native_overlays, "raise_widget") as promote:
+                window.video.render_window.mouseMoved.emit(); APP.processEvents()
+                self.assertTrue(window._chrome_visible)
+                promoted = [call.args[0] for call in promote.call_args_list]
+                self.assertIn(window.title_bar, promoted)
+                self.assertIn(window.app_menu_bar, promoted)
+                self.assertIn(window.control_bar, promoted)
+
+            window.overlays.animate(False); APP.processEvents()
+            window.eventFilter(window.central_shell, QEvent(QEvent.Type.MouseMove))
+            self.assertTrue(window._chrome_visible)
+
+            window._is_playing = False
+            window._toggle_fullscreen(); APP.processEvents()
             self._dispose(window)
 
     def test_fullscreen_transition_fades_and_finishes_at_full_opacity(self) -> None:

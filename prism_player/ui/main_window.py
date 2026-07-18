@@ -183,6 +183,7 @@ class MainWindow(QMainWindow):
         self.native_overlays = NativeOverlayStack(self)
         self.native_overlays.register_many(
             (
+                self.title_bar,
                 self.crop_overlay,
                 self.drop_overlay,
                 self.buffering_indicator,
@@ -220,6 +221,8 @@ class MainWindow(QMainWindow):
         self._register_actions()
         self.media_controls.actionRequested.connect(self._handle_system_media_action)
         self._build_app_menu()
+        self.native_overlays.register(self.app_menu_bar)
+        self.native_overlays.watch_surface(self.video.render_window)
         self._load_keybindings()
         self._position_overlays()
         self._connect_signals()
@@ -489,7 +492,9 @@ class MainWindow(QMainWindow):
         self.setAcceptDrops(True)
         self.setMinimumSize(*MIN_WINDOW_SIZE)
         self.resize(*DEFAULT_WINDOW_SIZE)
-        self.setContentsMargins(0, TITLE_BAR_HEIGHT + APP_MENU_HEIGHT, 0, 0)
+        # Chrome is an overlay. The native video surface always owns the full
+        # client area; title/menu/OSC must never reserve a black gutter.
+        self.setContentsMargins(0, 0, 0, 0)
         central = QWidget(self)
         self.central_shell = central
         central.setStyleSheet("background: #0d0d0d;")
@@ -747,6 +752,17 @@ class MainWindow(QMainWindow):
     def eventFilter(self, watched: object, event: QEvent) -> bool:
         if self._handle_window_edge_event(watched, event):
             return True
+        if (
+            self.isFullScreen()
+            and event.type() == QEvent.Type.MouseMove
+            and isinstance(watched, QWidget)
+            and (watched is self or self.isAncestorOf(watched))
+        ):
+            # The native render QWindow has its own direct signal path. This
+            # covers every QWidget region above it (OSD, menus, sidebars, and
+            # transient overlays) so fullscreen activity cannot be lost when
+            # the pointer is not currently over the render child.
+            self._show_controls()
         if watched is self.title_bar or watched is self.control_bar:
             if event.type() in {QEvent.Type.Enter, QEvent.Type.MouseMove}:
                 self._show_player_chrome()
@@ -1271,9 +1287,10 @@ class MainWindow(QMainWindow):
         self.sidebars.suspend()
 
     def _set_top_chrome_reserved(self, enabled: bool) -> None:
-        target = TITLE_BAR_HEIGHT + APP_MENU_HEIGHT if enabled else 0
-        if self.contentsMargins().top() != target:
-            self.setContentsMargins(0, target, 0, 0)
+        """Compatibility hook: player chrome never reserves video geometry."""
+        del enabled
+        if self.contentsMargins().top() != 0:
+            self.setContentsMargins(0, 0, 0, 0)
 
     def _apply_mode_layout(self) -> None:
         """Apply chrome visibility for the controller's current explicit mode."""
@@ -1313,10 +1330,7 @@ class MainWindow(QMainWindow):
         self.control_bar.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, not visible)
         self._position_overlays()
         if visible:
-            self.title_bar.raise_()
-            if self.app_menu_bar is not None:
-                self.app_menu_bar.raise_()
-            self.control_bar.raise_()
+            self.overlays.raise_chrome()
         if self._is_playing and not self._mini_mode and not self._pip_mode:
             self._schedule_hide_player_chrome(3000)
 
@@ -1627,12 +1641,9 @@ class MainWindow(QMainWindow):
                 extra_width += int(self.settings.get("ui.sidebar_width", 320))
             if self.sidebars.quick_pinned:
                 extra_width += int(self.settings.get("ui.quick_settings_width", QUICK_SETTINGS_PANEL_WIDTH))
-        extra_height = 0
-        if bool(self.settings.get(ENABLE_TITLE_BAR_AND_OSC, True)):
-            extra_height += TITLE_BAR_HEIGHT + APP_MENU_HEIGHT
-        if str(self.settings.get(OSC_POSITION, "floating")) == "bottom":
-            extra_height += self.control_bar.height()
-        return extra_width, extra_height
+        # Top chrome and every OSC placement overlay the video. Only pinned
+        # sidebars contribute persistent layout space.
+        return extra_width, 0
 
     def _start_system_move(self, global_pos: QPoint | None = None) -> None:
         del global_pos
